@@ -1,0 +1,24 @@
+# Render Blueprint for Hiring Badge Finder (see DEPLOY.md).
+# One web service + one persistent disk for the SQLite database.
+services:
+  - type: web
+    name: hiring-badge-finder
+    runtime: python
+    plan: starter            # a persistent disk needs a paid instance; the free plan loses data on restart
+    numInstances: 1          # SQLite on one disk: never scale beyond one instance
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips "*"
+    healthCheckPath: /api/extension/info
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.8
+      - key: DATABASE_URL
+        value: sqlite:////var/data/hiring_badge_finder.db
+      - key: HBF_WEBSITE_LOOKUP
+        value: "1"
+      # RENDER_EXTERNAL_URL is set by Render automatically; the server trusts only that address.
+      # Using a custom domain? Set HBF_PUBLIC_URL to it (https://..., no trailing slash).
+    disk:
+      name: hbf-data
+      mountPath: /var/data
+      sizeGB: 1

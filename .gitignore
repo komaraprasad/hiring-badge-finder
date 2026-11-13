@@ -1,0 +1,19 @@
+# secrets and local data
+.env
+*.db
+*.db-wal
+*.db-shm
+data/
+backups/
+*.bak
+
+# python / node
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+node_modules/
+
+# generated
+requirements.lock.txt
+*.zip

@@ -1,0 +1,9 @@
+# Runtime packages. run.bat installs these, then writes the exact versions it
+# installed to requirements.lock.txt (see README, "Pinned versions").
+fastapi==0.162.0
+starlette==1.10.0
+pydantic==2.14.2
+pydantic_core==2.50.2
+uvicorn==0.54.0
+openpyxl==3.1.5
+truststore==0.10.5
