@@ -400,3 +400,38 @@ def test_deployed_extension_zip_points_at_its_own_address(client, monkeypatch):
     assert f"const DEFAULT_SERVER = '{SITE}';" in z.read("background.js").decode()
     opts = z.read("options.js").decode()
     assert f"const DEFAULT_SERVER = '{SITE}';" in opts and f"const DEPLOYED_SERVER = '{SITE}';" in opts
+
+
+# ------------------------------------------------------------- fast lead details (one call per lead)
+def test_fast_details_one_call_saves_and_hands_out_the_next(client):
+    job = start(client).json()["job_id"]
+    client.post("/api/ingest", json={"job_id": job, "people": [person(1), person(2)]})
+    r = client.post("/api/details/fast", json={"job_id": job}).json()
+    first = r["task"]
+    assert r["stop"] == "" and first["kind"] == "profile"
+    done = {"person_id": first["person_id"], "company": "MediaTek", "title": "Senior Recruiter",
+            "company_url": "https://www.linkedin.com/company/mediatek/", "page_name": "MediaTek",
+            "industry": "Semiconductors", "size": "10,001+ employees"}
+    r = client.post("/api/details/fast", json={"job_id": job, "done": done}).json()
+    second = r["task"]
+    assert second and second["person_id"] != first["person_id"]          # the next lead, not the same one
+    r = client.post("/api/details/fast", json={"job_id": job, "done": {"person_id": second["person_id"],
+                                                                         "note": "no current job on the profile"}}).json()
+    assert r["task"] is None
+    leads = {p["id"]: p for p in client.get("/api/leads", params={"job_id": job}).json()["items"]}
+    got = leads[first["person_id"]]
+    assert (got["company"], got["company_industry"], got["company_size"]) == ("MediaTek", "Semiconductors", "10,001+ employees")
+    assert leads[second["person_id"]]["company_industry"] in ("", None)
+    assert client.get("/api/status", params={"job_id": job}).json()["detail_pages"] == 2     # each lead counted once
+
+
+def test_fast_details_stops_when_the_search_was_stopped(client):
+    job = start(client).json()["job_id"]
+    client.post("/api/ingest", json={"job_id": job, "people": [person(1)]})
+    client.post("/api/stop", params={"job_id": job})
+    r = client.post("/api/details/fast", json={"job_id": job}).json()
+    assert r["task"] is None and r["stop"]
+
+
+def test_server_time_header(client):
+    assert "x-process-ms" in client.get("/api/settings").headers

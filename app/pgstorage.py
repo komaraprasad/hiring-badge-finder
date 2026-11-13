@@ -10,6 +10,8 @@ BEGIN IMMEDIATE, so the counting rules (daily limits, 5 parallel searches) stay 
 from __future__ import annotations
 
 import re
+import time
+import weakref
 from contextlib import contextmanager
 
 from .storage import Storage
@@ -112,9 +114,20 @@ class PostgresStorage(Storage):
         kwargs = {"row_factory": _row_factory, "prepare_threshold": None}   # None: works behind PgBouncer
         if schema:
             kwargs["options"] = f"-c search_path={schema}"
-        self.pool = ConnectionPool(url, min_size=1, max_size=10, kwargs=kwargs, open=True,
-                                   check=ConnectionPool.check_connection,   # a free DB closes idle links
-                                   timeout=30)
+        # A ping before EVERY use cost one extra round trip per call (the database may be far away).
+        # Only a connection that sat unused for 30 s is pinged first (a free database closes idle ones);
+        # one in steady use during a run is trusted. Idle connections are replaced after 2 minutes.
+        last_used = weakref.WeakKeyDictionary()
+
+        def check(conn):
+            if time.monotonic() - last_used.get(conn, 0) > 30:
+                ConnectionPool.check_connection(conn)
+
+        def mark(conn):
+            last_used[conn] = time.monotonic()
+
+        self.pool = ConnectionPool(url, min_size=2, max_size=10, kwargs=kwargs, open=True, check=check,
+                                   reset=mark, max_idle=120, max_lifetime=1800, timeout=30)
         if schema:
             with self.pool.connection() as conn:
                 conn.execute(f"CREATE SCHEMA IF NOT EXISTS {schema}")

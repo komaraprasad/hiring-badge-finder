@@ -385,13 +385,15 @@ async function waitTabLoaded(tabId, ms) {
 async function turnPage(tabId, jobId, page, url, waitMs) {
   const wait = Math.max(0, Math.min(waitMs, MAX_SLEEP_MS));
   const server = await serverForTab(tabId);
+  // The Stop check runs DURING the pause (a far server takes ~1 s to answer), not after it.
+  const status = callServer('/api/status?job_id=' + encodeURIComponent(jobId), 'GET', null, server);
   for (let left = wait; left > 0; left -= 2000) {
     callServer('/api/heartbeat', 'POST', { job_id: jobId, message: `page ${page}: waiting ${Math.ceil(left / 1000)}s before the next page` }, server);
     await new Promise((r) => setTimeout(r, Math.min(2000, left)));
   }
   const jobs = await getJobs();
   if (!jobs[tabId] || jobs[tabId].jobId !== jobId) return;          // stopped or closed meanwhile
-  const st = await callServer('/api/status?job_id=' + encodeURIComponent(jobId), 'GET', null, server);
+  const st = await status;
   if (st.ok && st.json && st.json.status !== 'running') return;     // Stop was pressed during the pause
   callServer('/api/heartbeat', 'POST', { job_id: jobId, message: `page ${page + 1}: loading` }, server);
   try { await chrome.tabs.update(tabId, { url }); } catch (e) { /* tab closed */ }
@@ -642,17 +644,22 @@ async function fastReader(tabId, k) {
   const fd = FD();
   let formatFails = 0;
   let idle = 0;
+  let done = null;                       // the lead just read: saved by the NEXT server call (one call per lead)
+  let lastRead = 0;                      // when this reader last asked LinkedIn
   if (k) await new Promise((r) => setTimeout(r, 400 * k));            // readers start a little apart
   for (;;) {
     const j = (await getJobs())[tabId];
-    if (!j || !j.fast || j.fastStop) return;
-    const st = await callServer('/api/status?job_id=' + encodeURIComponent(j.jobId), 'GET', null, j.serverUrl);
-    const status = st.ok && st.json ? st.json.status : '';
-    if (status === 'error' || status === 'stopped') return fastStop(tabId, { fastStop: true, fastWhy: 'the search was stopped' });
-    const r = await callServer('/api/details/next?job_id=' + encodeURIComponent(j.jobId), 'GET', null, j.serverUrl);
-    const task = r.ok && r.json ? r.json.task : null;
+    if (!j || !j.fast || j.fastStop) {
+      if (done && j) await callServer('/api/details/fast', 'POST', { job_id: j.jobId, done }, j.serverUrl);
+      return;
+    }
+    // ONE call: saves the previous lead, checks the run, counts and hands out the next lead.
+    const r = await callServer('/api/details/fast', 'POST', { job_id: j.jobId, done }, j.serverUrl);
+    if (!r.ok || !r.json) return fastStop(tabId, { fastStop: true, fastWhy: 'dashboard not reachable' });
+    done = null;
+    const { status, task, stop } = r.json;
+    if (stop) return fastStop(tabId, { fastStop: true, fastWhy: stop });
     if (!task) {
-      if (!r.ok) return fastStop(tabId, { fastStop: true, fastWhy: 'dashboard not reachable' });
       if (status === 'running' && idle < 600) { idle += 1; await new Promise((res) => setTimeout(res, 1000)); continue; }
       return;                                                         // search over and nothing left
     }
@@ -660,10 +667,12 @@ async function fastReader(tabId, k) {
     const slug = (String(task.url || '').match(/\/in\/([^/?#]+)/) || [])[1];
     if (task.kind !== 'profile' || !slug) continue;
 
-    const wait = Math.round(fd.minWaitMs + Math.random() * (fd.maxWaitMs - fd.minWaitMs));
-    await new Promise((res) => setTimeout(res, wait));
-    const ok = await callServer('/api/details/page', 'POST', { job_id: j.jobId }, j.serverUrl);   // counts it, or refuses past the limits
-    if (!ok.ok || !ok.json || !ok.json.ok) return fastStop(tabId, { fastStop: true, fastWhy: (ok.json && ok.json.reason) || 'dashboard not reachable' });
+    // Cautious pace: at least a random 1-2.5 s between this reader's LinkedIn requests. Time spent
+    // waiting for the server already counts towards it (LinkedIn never sees requests closer together).
+    const gap = Math.round(fd.minWaitMs + Math.random() * (fd.maxWaitMs - fd.minWaitMs));
+    const left = lastRead + gap - Date.now();
+    if (left > 0) await new Promise((res) => setTimeout(res, left));
+    lastRead = Date.now();
 
     let got;
     try {
@@ -685,22 +694,14 @@ async function fastReader(tabId, k) {
     }
     if (got.kind !== 'ok') {
       formatFails += 1;
-      await companyBeat(j, `Lead details: could not read LinkedIn's data (${got.text})`);
+      companyBeat(j, `Lead details: could not read LinkedIn's data (${got.text})`);
       if (formatFails >= 2) return fastStop(tabId, { fastStop: true, fastFallback: true });
       continue;                                                       // the server hands this lead out again later
     }
     formatFails = 0;
-    if (got.url && (got.industry || got.size)) {
-      await callServer('/api/companies', 'POST', { job_id: j.jobId, name: (got.pageName || got.company).slice(0, 200) || 'company',
-        status: 'found', industry: got.industry, size: got.size, linkedin_url: got.url, by_link: true,
-        page_name: got.pageName.slice(0, 200) }, j.serverUrl);
-    }
-    await callServer('/api/details/profile', 'POST', { job_id: j.jobId, person_id: task.person_id,
-      company: got.company ? got.company.slice(0, 200) : '', title: (got.title || '').slice(0, 200),
-      company_url: got.url || '', note: (got.why || '').slice(0, 200) }, j.serverUrl);
-    await companyBeat(j, 'Lead details: ' + (got.company
-      ? `${got.company}${got.industry || got.size ? ': ' + [got.industry, got.size].filter(Boolean).join(', ') : ''}`
-      : `no current company (${got.why || 'not shown'})`));
+    done = { person_id: task.person_id, company: (got.company || '').slice(0, 200), title: (got.title || '').slice(0, 200),
+             company_url: got.url || '', page_name: (got.pageName || '').slice(0, 200), industry: (got.industry || '').slice(0, 120),
+             size: (got.size || '').slice(0, 60), note: (got.why || '').slice(0, 300) };
   }
 }
 

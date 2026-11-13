@@ -785,7 +785,7 @@
     }
     const badges = people.filter((p) => p.badge_frame).length;
     const roles = people.filter((p) => p.open_roles).length;
-    await beat(`page ${page}: ${people.length} cards, ${badges} badges, ${skipped} framed without open roles (skipped), ${roles} with open roles`);
+    beat(`page ${page}: ${people.length} cards, ${badges} badges, ${skipped} framed without open roles (skipped), ${roles} with open roles`);
 
     const res = await api('/api/ingest', { job_id: job.jobId, people });
     if (!res.ok) {
@@ -794,7 +794,7 @@
     pagesDone += 1;
     try { sessionStorage.setItem(doneKey, String(pagesDone)); } catch (e) { /* storage blocked */ }
     const verdict = res.json || {};
-    await beat(`page ${page}: saved ${verdict.saved}/${verdict.target}`);
+    beat(`page ${page}: saved ${verdict.saved}/${verdict.target}`);
     if (!verdict.continue) { await send({ type: 'done' }); return; }
     if (pagesDone >= maxPages) return finish('page limit reached');
     if (!nextEnabled(findNext())) return finish('no more pages');

@@ -488,6 +488,74 @@ def details_profile(body: ProfileCompanyBody):
     return r
 
 
+class FastDone(BaseModel):
+    person_id: int
+    company: str = Field("", max_length=200)
+    title: str = Field("", max_length=200)
+    company_url: str = Field("", max_length=300)
+    page_name: str = Field("", max_length=200)
+    industry: str = Field("", max_length=120)
+    size: str = Field("", max_length=60)
+    note: str = Field("", max_length=300)
+
+
+class FastBody(BaseModel):
+    job_id: str
+    done: FastDone | None = None          # the lead this reader just finished (None on its first call)
+
+
+def _claim_next(job_id: str) -> dict | None:
+    with _CLAIMS_LOCK:
+        now = time.time()
+        claims = {pid: t for pid, t in _CLAIMS.setdefault(job_id, {}).items() if now - t < 180}
+        task = db().next_detail_task(job_id, exclude=set(claims))
+        if task:
+            claims[task["person_id"]] = now
+        _CLAIMS[job_id] = claims
+    return task
+
+
+@app.post("/api/details/fast")
+def details_fast(body: FastBody):
+    """Fast lead details in ONE call per lead (the server is far from the browser: every call costs
+    ~1 s): save the lead just read, report it, and hand out the next one with its page counted."""
+    job = _job_or_404(body.job_id)
+    d = body.done
+    if d:
+        company = " ".join(d.company.split())
+        url = d.company_url.strip() if _COMPANY_URL_RE.match(d.company_url.strip()) else ""
+        industry, size = " ".join(d.industry.split()), " ".join(d.size.split())
+        if size and not _SIZE_RE.match(size):
+            size = ""
+        if url and (industry or size):
+            db().save_company((d.page_name or company or "company")[:200], industry, size, url, "found", by_link=True,
+                              page_name=" ".join(d.page_name.split()))
+        db().save_profile_company(body.job_id, d.person_id, company, " ".join(d.title.split()), url,
+                                  " ".join(d.note.split()))
+        bus.publish("heartbeat", {"job_id": body.job_id, "message": "Lead details: " + (
+            f"{company}: {', '.join(x for x in (industry, size) if x)}" if company and (industry or size)
+            else company or f"no current company ({d.note or 'not shown'})")})
+    if job["status"] in ("stopped", "error"):
+        return {"status": job["status"], "task": None, "stop": "the search was stopped"}
+    if not COMPANY_DETAILS_ON:
+        return {"status": job["status"], "task": None, "stop": ""}
+    task = _claim_next(body.job_id)
+    if task:
+        per_run = max(MAX_DETAIL_PAGES_PER_RUN, 2 * int(job.get("target") or 0) + 10)
+        if not db().count_detail_page(body.job_id, per_run, MAX_DETAIL_PAGES_PER_DAY):
+            return {"status": job["status"], "task": None,
+                    "stop": f"limit of {per_run} pages per search / {MAX_DETAIL_PAGES_PER_DAY} per day reached"}
+    return {"status": job["status"], "task": task, "stop": ""}
+
+
+@app.middleware("http")
+async def _timing(request, call_next):
+    t0 = time.perf_counter()
+    response = await call_next(request)
+    response.headers["X-Process-Ms"] = str(round((time.perf_counter() - t0) * 1000))   # server time, for checking speed
+    return response
+
+
 @app.post("/api/companies")
 def save_company(body: CompanyBody):
     """One company's details as read from its LinkedIn About page. Anything not in LinkedIn's
