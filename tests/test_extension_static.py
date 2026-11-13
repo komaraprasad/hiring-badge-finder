@@ -55,11 +55,29 @@ def _without_lookup(text):
     return text[:text.index("async function lookupPlace")] + text[text.index("async function autoSetUp"):]
 
 
+def _without_lead_reader(text):
+    """background.js without readLeadInPage (runs inside the LinkedIn tab; see the test below)."""
+    return text[:text.index("async function readLeadInPage")] + text[text.index("async function startFastDetails"):]
+
+
+def test_fast_reader_only_reads_linkedins_profile_data_and_keeps_nothing():
+    text = (EXT / "background.js").read_text(encoding="utf-8")
+    fn = text[text.index("async function readLeadInPage"):text.index("async function startFastDetails")]
+    assert fn.count("fetch(") == 1                       # one request: the configured profile-data path
+    assert "pathTemplate" in fn and "http" not in fn.split("fetch(")[1].split(")")[0]   # relative: LinkedIn only
+    for banned in ("callServer", "chrome.", "localStorage", "sessionStorage", "postMessage", "XMLHttpRequest"):
+        assert banned not in fn, banned                  # the session value is used as a header, never stored or sent
+    cfg = (EXT / "config.js").read_text(encoding="utf-8")
+    assert "profileUrl: '/voyager/api/identity/dash/profiles?" in cfg
+
+
 def test_no_secrets_or_external_calls_in_extension():
     for p in EXT.glob("*.js"):
         text = p.read_text(encoding="utf-8")
         if p.name == "content_search.js":                # the one location lookup may read it, nothing else
             text = _without_lookup(text)
+        if p.name == "background.js":                    # ...and the fast lead-details reader (1.46.0)
+            text = _without_lead_reader(text)
         assert "document.cookie" not in text, p.name
         assert "chrome.cookies" not in text, p.name
         assert "XMLHttpRequest" not in text, p.name

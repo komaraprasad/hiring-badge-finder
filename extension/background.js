@@ -336,7 +336,22 @@ async function openSearch(msg, senderTab) {
   // HBF_CONFIG.pacing.detailTabs hidden tabs of the same group (1.42.0: 4, chosen by the user for
   // speed). The server hands each person to ONE tab. Every tab keeps its own random 4-8 s pause
   // before every page; a LinkedIn notice in any tab stops the whole run.
-  for (let k = 0; k < (HBF_CONFIG.pacing.detailTabs || 1); k++) {
+  if ((HBF_CONFIG.fastDetails || {}).on) {
+    // Fast: one helper tab reads LinkedIn's profile data (see startFastDetails).
+    try {
+      const dprops = { url: HBF_CONFIG.fastDetails.homeUrl, active: false };
+      if (tab.windowId != null) dprops.windowId = tab.windowId;
+      const dtab = await chrome.tabs.create(dprops);
+      await updateJobs((jobs) => {
+        jobs[dtab.id] = { jobId: msg.jobId, groupId: null, startedAt: Date.now(), fast: true,
+                          dashboardTabId: senderTab ? senderTab.id : null, serverUrl: server };
+      });
+      await putInGroup(dtab.id, dtab.windowId);
+      await waitTabLoaded(dtab.id, 15000);
+      startFastDetails(dtab.id);
+    } catch (e) { /* no details tab: the search still runs */ }
+  }
+  for (let k = 0; k < ((HBF_CONFIG.fastDetails || {}).on ? 0 : (HBF_CONFIG.pacing.detailTabs || 1)); k++) {
     try {
       const dprops = { url: 'about:blank', active: false };
       if (tab.windowId != null) dprops.windowId = tab.windowId;
@@ -354,6 +369,16 @@ async function openSearch(msg, senderTab) {
   const g = await callServer('/api/search/geo', 'POST', { job_id: msg.jobId, geo_ids: geoIds || [], widened: false }, server);
   if (!g.ok && g.status === 0) await reportUnreachable(senderTab && senderTab.id, server, '/api/search/geo', g.error);
   return { ok: true, tabId: tab.id };
+}
+
+/** Resolves when the tab has finished loading (or after `ms`, whatever comes first). */
+async function waitTabLoaded(tabId, ms) {
+  const end = Date.now() + ms;
+  while (Date.now() < end) {
+    try { if ((await chrome.tabs.get(tabId)).status === 'complete') return true; } catch (e) { return false; }
+    await new Promise((r) => setTimeout(r, 250));
+  }
+  return false;
 }
 
 /** Safety pause (with progress messages), then load the next results page in the same tab. */
@@ -534,6 +559,160 @@ async function detailsResult(tabId, msg) {
   }
   return { ok: true };
 }
+
+// ------------------------------------------------- FAST lead details (1.46.0)
+// One hidden helper tab on a plain LinkedIn address; from it, LinkedIn's own profile data is read for
+// each lead (one request, ~0.5 s): current job -> company name, LinkedIn page, industry, size.
+// HBF_CONFIG.fastDetails.workers readers share the tab, each with its own random pause. Same server
+// endpoints, limits and stop rules as the classic page-by-page method, which takes over by itself
+// when this data cannot be read (LinkedIn changed it).
+const FD = () => HBF_CONFIG.fastDetails || {};
+const fastWorkers = new Map();        // helper tab id -> running reader count (this worker's memory)
+
+/** Runs INSIDE the LinkedIn helper tab (page origin, the person's own session). Self-contained. */
+async function readLeadInPage(slug, pathTemplate) {
+  const csrf = (document.cookie.match(/JSESSIONID="?([^";]+)"?/) || [])[1];
+  if (!csrf) return { kind: 'signin', text: 'You are not signed in to LinkedIn in this browser.' };
+  let res;
+  try {
+    res = await fetch(pathTemplate.replace('{slug}', encodeURIComponent(slug)), {
+      credentials: 'include',
+      headers: { 'csrf-token': csrf, 'x-restli-protocol-version': '2.0.0', accept: 'application/vnd.linkedin.normalized+json+2.1' },
+    });
+  } catch (e) { return { kind: 'error', text: 'request failed' }; }
+  const path = (() => { try { return new URL(res.url).pathname; } catch (e) { return ''; } })();
+  if (/^\/(checkpoint|authwall|login|uas)\b/.test(path)) return { kind: 'limit', text: 'LinkedIn is asking for a sign-in or security check.' };
+  if (res.status === 429 || res.status === 999) return { kind: 'limit', text: `LinkedIn refused the request (status ${res.status}).` };
+  if (res.status === 401 || res.status === 403) return { kind: 'signin', text: `LinkedIn refused the request (status ${res.status}); sign in again.` };
+  if (res.status === 404 || res.status === 410) return { kind: 'ok', why: 'profile not available' };
+  if (!res.ok) return { kind: 'format', text: 'status ' + res.status };
+  let data;
+  try { data = await res.json(); } catch (e) { return { kind: 'format', text: 'not JSON' }; }
+  const inc = Array.isArray(data.included) ? data.included : [];
+  if (!inc.some((e) => /identity\.profile\.Profile$/.test(e.$type || ''))) return { kind: 'format', text: 'no profile in the data' };
+  const byUrn = new Map(inc.filter((e) => e.entityUrn).map((e) => [e.entityUrn, e]));
+  const when = (p) => { const s = (p.dateRange && p.dateRange.start) || {}; return (s.year || 0) * 100 + (s.month || 0); };
+  const current = inc.filter((e) => /identity\.profile\.Position$/.test(e.$type || '') && e.dateRange && e.dateRange.start && !e.dateRange.end)
+    .sort((a, b) => when(b) - when(a));
+  if (!current.length) return { kind: 'ok', why: 'no current job on the profile' };
+  const p = current[0];
+  const co = byUrn.get(p.companyUrn || p['*company'] || '') || {};
+  const industry = (co.industryUrns || []).map((u) => (byUrn.get(u) || {}).name).find(Boolean) || '';
+  const r = co.employeeCountRange || {};
+  const n = (x) => Number(x).toLocaleString('en-US');
+  const size = r.start ? (r.end ? `${n(r.start)}-${n(r.end)} employees` : `${n(r.start)}+ employees`) : '';
+  const url = /^https:\/\/www\.linkedin\.com\/company\/[^/?#\s]+\/?$/.test(co.url || '') ? co.url : '';
+  return { kind: 'ok', title: String(p.title || ''), company: String(p.companyName || co.name || ''),
+           pageName: String(co.name || ''), url, industry, size, why: url ? '' : 'current job has no LinkedIn company page' };
+}
+
+async function startFastDetails(tabId) {
+  const j = (await getJobs())[tabId];
+  if (!j || !j.fast) return;
+  const want = FD().workers || 2;
+  const have = fastWorkers.get(tabId) || 0;
+  for (let k = have; k < want; k++) {
+    fastWorkers.set(tabId, (fastWorkers.get(tabId) || 0) + 1);
+    fastReader(tabId, k).catch(() => {}).finally(() => fastReaderEnded(tabId));
+  }
+}
+
+async function fastReaderEnded(tabId) {
+  const left = (fastWorkers.get(tabId) || 1) - 1;
+  if (left > 0) { fastWorkers.set(tabId, left); return; }
+  fastWorkers.delete(tabId);
+  const j = (await getJobs())[tabId];
+  if (!j || !j.fast) return;
+  await updateJobs((all) => { if (all[tabId]) all[tabId].fast = false; });
+  if (j.fastFallback) {
+    // LinkedIn's data could not be read: the classic page-by-page method finishes the job in this tab.
+    await companyBeat(j, 'Lead details: switching to reading pages (slower)');
+    await updateJobs((all) => { if (all[tabId]) all[tabId].details = true; });
+    return startCompanies(tabId);
+  }
+  await companyBeat(j, 'Lead details: done' + (j.fastWhy ? ` (${j.fastWhy})` : ''));
+  closeTabLater(tabId, 3000);
+}
+
+async function fastStop(tabId, change) {
+  await updateJobs((all) => { if (all[tabId]) Object.assign(all[tabId], change); });
+}
+
+async function fastReader(tabId, k) {
+  const fd = FD();
+  let formatFails = 0;
+  let idle = 0;
+  if (k) await new Promise((r) => setTimeout(r, 400 * k));            // readers start a little apart
+  for (;;) {
+    const j = (await getJobs())[tabId];
+    if (!j || !j.fast || j.fastStop) return;
+    const st = await callServer('/api/status?job_id=' + encodeURIComponent(j.jobId), 'GET', null, j.serverUrl);
+    const status = st.ok && st.json ? st.json.status : '';
+    if (status === 'error' || status === 'stopped') return fastStop(tabId, { fastStop: true, fastWhy: 'the search was stopped' });
+    const r = await callServer('/api/details/next?job_id=' + encodeURIComponent(j.jobId), 'GET', null, j.serverUrl);
+    const task = r.ok && r.json ? r.json.task : null;
+    if (!task) {
+      if (!r.ok) return fastStop(tabId, { fastStop: true, fastWhy: 'dashboard not reachable' });
+      if (status === 'running' && idle < 600) { idle += 1; await new Promise((res) => setTimeout(res, 1000)); continue; }
+      return;                                                         // search over and nothing left
+    }
+    idle = 0;
+    const slug = (String(task.url || '').match(/\/in\/([^/?#]+)/) || [])[1];
+    if (task.kind !== 'profile' || !slug) continue;
+
+    const wait = Math.round(fd.minWaitMs + Math.random() * (fd.maxWaitMs - fd.minWaitMs));
+    await new Promise((res) => setTimeout(res, wait));
+    const ok = await callServer('/api/details/page', 'POST', { job_id: j.jobId }, j.serverUrl);   // counts it, or refuses past the limits
+    if (!ok.ok || !ok.json || !ok.json.ok) return fastStop(tabId, { fastStop: true, fastWhy: (ok.json && ok.json.reason) || 'dashboard not reachable' });
+
+    let got;
+    try {
+      const [res] = await chrome.scripting.executeScript({ target: { tabId }, func: readLeadInPage,
+                                                           args: [decodeURIComponent(slug), fd.profileUrl] });
+      got = (res && res.result) || { kind: 'format', text: 'no answer from the page' };
+    } catch (e) {
+      got = { kind: 'format', text: 'helper tab not ready (' + String(e && e.message || e).slice(0, 80) + ')' };
+    }
+
+    if (got.kind === 'limit' || got.kind === 'signin') {
+      // Same rule as the search: any LinkedIn notice stops the whole run and shows the tab.
+      await fastStop(tabId, { fastStop: true, fastWhy: 'LinkedIn showed a notice' });
+      await companyBeat(j, 'Lead details stopped: ' + got.text);
+      await callServer('/api/error', 'POST', { job_id: j.jobId, message: 'LinkedIn showed a notice while reading lead details: ' + got.text }, j.serverUrl);
+      try { await chrome.tabs.update(tabId, { url: 'https://www.linkedin.com/feed/' }); } catch (e) { /* closed */ }
+      await showTab(tabId);
+      return;
+    }
+    if (got.kind !== 'ok') {
+      formatFails += 1;
+      await companyBeat(j, `Lead details: could not read LinkedIn's data (${got.text})`);
+      if (formatFails >= 2) return fastStop(tabId, { fastStop: true, fastFallback: true });
+      continue;                                                       // the server hands this lead out again later
+    }
+    formatFails = 0;
+    if (got.url && (got.industry || got.size)) {
+      await callServer('/api/companies', 'POST', { job_id: j.jobId, name: (got.pageName || got.company).slice(0, 200) || 'company',
+        status: 'found', industry: got.industry, size: got.size, linkedin_url: got.url, by_link: true,
+        page_name: got.pageName.slice(0, 200) }, j.serverUrl);
+    }
+    await callServer('/api/details/profile', 'POST', { job_id: j.jobId, person_id: task.person_id,
+      company: got.company ? got.company.slice(0, 200) : '', title: (got.title || '').slice(0, 200),
+      company_url: got.url || '', note: (got.why || '').slice(0, 200) }, j.serverUrl);
+    await companyBeat(j, 'Lead details: ' + (got.company
+      ? `${got.company}${got.industry || got.size ? ': ' + [got.industry, got.size].filter(Boolean).join(', ') : ''}`
+      : `no current company (${got.why || 'not shown'})`));
+  }
+}
+
+// The browser may stop this worker between events; readers that died are restarted from here.
+chrome.alarms.create('hbf-fast-watch', { periodInMinutes: 0.5 });
+chrome.alarms.onAlarm.addListener(async (alarm) => {
+  if (alarm.name !== 'hbf-fast-watch') return;
+  const jobs = await getJobs();
+  for (const [id, j] of Object.entries(jobs)) {
+    if (j.fast && !j.fastStop && !fastWorkers.has(Number(id))) startFastDetails(Number(id));
+  }
+});
 
 async function closeTabLater(tabId, ms) {
   setTimeout(async () => {

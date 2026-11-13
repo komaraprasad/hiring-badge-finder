@@ -86,8 +86,26 @@
     },
 
     // --- Pacing (also enforced by the server) ----------------------------
-    pacing: { minWaitMs: 4000, maxWaitMs: 8000, maxPages: 30,
-              detailTabs: 8 },   // company-details tabs working in parallel (each keeps its own 4-8 s pause)
+    // "Cautious" fast mode (chosen Nov 2026, goal: a run in about a minute): a random 1-2.5 s pause
+    // before each results page instead of 4-8 s. Daily caps (server) are unchanged.
+    pacing: { minWaitMs: 1000, maxWaitMs: 2500, maxPages: 30,
+              detailTabs: 2 },   // classic company-details tabs: only used when fast details cannot read
+
+    // --- Fast lead details (1.46.0) ----------------------------------------
+    // Company, Industry and Size from LinkedIn's own profile data (one request per lead, ~0.5 s),
+    // the same data its profile page loads, instead of two full pages (Experience + About).
+    // Checked on a real signed-in account (Nov 2026, discovery/probe_fast_mode_2.js): Position
+    // (companyName, companyUrn, dateRange without end = current), Company (name, url,
+    // employeeCountRange, industryUrns), Industry (name). 2 at a time, random 1-2.5 s pause each.
+    fastDetails: {
+      on: true,
+      workers: 2,
+      minWaitMs: 1000, maxWaitMs: 2500,
+      profileUrl: '/voyager/api/identity/dash/profiles?q=memberIdentity&memberIdentity={slug}' +
+        '&decorationId=com.linkedin.voyager.dash.deco.identity.profile.FullProfileWithEntities-93',
+      // a plain LinkedIn address the hidden helper tab opens (small, no LinkedIn app) to make the requests from
+      homeUrl: 'https://www.linkedin.com/robots.txt',
+    },
 
     // --- Rendering all cards on a page -----------------------------------
     render: { zoom: '0.25', scrollTries: 12, scrollGapMs: 500 },
