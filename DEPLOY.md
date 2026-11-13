@@ -65,6 +65,18 @@ Render keeps daily snapshots of the disk for 7 days (Dashboard → the service �
 copy: **Shell** tab → `sqlite3 /var/data/hiring_badge_finder.db ".backup /tmp/hbf.db"`, then copy it out,
 or use **Export all** on the Leads tab for an Excel file.
 
+## If it stops working after a deploy
+
+| What you see | Why | Fix |
+|---|---|---|
+| Dashboard says the extension is too old / asks to Reload | The deploy changed the extension | Download it again from the dashboard, replace the folder, click **Reload** in `edge://extensions`, Ctrl+F5 |
+| "Could not reach the dashboard server" | Render was restarting for more than ~2 minutes (the extension retries that long) | Wait until the service is **Live**, then Launch again: it continues where it stopped |
+| "Already 5 searches running" | Old searches lost their browser tab | Wait 15 minutes (quiet searches close by themselves) or press **Stop** on them |
+| Page does not load / "Service Unavailable" | Deploy or build in progress, or failed | Render → the service → **Events** / **Logs** |
+| All leads gone after a restart | The service runs without the disk (e.g. free plan) | Use the Starter plan with the `hbf-data` disk, as in render.yaml |
+
+Avoid pushing changes while a search is running: each push restarts the server.
+
 ## Running on a computer instead
 
 Nothing changes: `run.bat` still starts it at http://localhost:8000, and the extension loaded from the
