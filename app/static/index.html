@@ -346,6 +346,8 @@
   @keyframes toast { from { opacity: 0; transform: translateY(20px) scale(.96); } to { opacity: 1; transform: none; } }
   @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
 </style>
+<style>html.hosted .only-local{display:none}html:not(.hosted) .only-hosted{display:none}</style>
+<script>if(!/^(localhost|127\.0\.0\.1)$/.test(location.hostname))document.documentElement.classList.add('hosted');</script>
 </head>
 <body>
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
@@ -384,11 +386,13 @@
     <p>This tool reads LinkedIn only through your own browser, using a small extension.</p>
     <ol>
       <li>Open <b>chrome://extensions</b> (or <b>edge://extensions</b>) and turn on <b>Developer mode</b>.</li>
-      <li>Click <b>Load unpacked</b> and choose the <b>extension</b> folder inside the Hiring Badge Finder project folder
+      <li class="only-local">Click <b>Load unpacked</b> and choose the <b>extension</b> folder inside the Hiring Badge Finder project folder
         (the folder that has run.bat). Later updates then only need <b>Reload</b>.</li>
+      <li class="only-hosted">Click <b>Download</b> below and extract the zip. Click <b>Load unpacked</b> and choose the
+        extracted folder. Use this download only: a copy from anywhere else will not connect to this dashboard.</li>
       <li>Come back to this page and <b>refresh</b> it.</li>
     </ol>
-    <p class="hint">Other computer without the project folder? Use <b>Download</b> and load the extracted folder instead.</p>
+    <p class="hint only-local">Other computer without the project folder? Use <b>Download</b> and load the extracted folder instead.</p>
     <div class="row">
       <a class="btn primary" href="/api/extension.zip" download>Download</a>
       <button id="hideInstall" type="button">Hide for now</button>
@@ -397,7 +401,7 @@
 
   <div id="updateBanner" class="banner update hidden" role="region" aria-label="Update the extension">
     <h2>A newer extension is available</h2>
-    <p>Your extension is version <b id="extHave"></b>. The newest is <b id="extNeed"></b>. Open <b>chrome://extensions</b>, click <b>Reload</b> on Hiring Badge Finder, then refresh this page. (Only if you installed from a downloaded zip: download it again and extract it over the old folder first.)</p>
+    <p>Your extension is version <b id="extHave"></b>. The newest is <b id="extNeed"></b>. Open <b>chrome://extensions</b>, click <b>Reload</b> on Hiring Badge Finder, then refresh this page.<span class="only-local"> (Only if you installed from a downloaded zip: download it again and extract it over the old folder first.)</span><span class="only-hosted"> First <a href="/api/extension.zip" download>download the new version</a> and extract it over the old folder.</span></p>
     <div class="row">
       <a class="btn primary" href="/api/extension.zip" download>Update</a>
       <button id="hideUpdate" type="button">Hide for now</button>
