@@ -6,6 +6,7 @@ services:
     name: hiring-badge-finder
     runtime: python
     plan: free
+    region: singapore        # next to the Neon database (AWS ap-southeast-1): each query ~1 ms instead of ~200 ms
     numInstances: 1
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips "*"
