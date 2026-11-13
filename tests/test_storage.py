@@ -670,3 +670,30 @@ def test_profile_title_fills_an_empty_designation(st):
     st.save_profile_company(j, pid, "Eightfold.ai", "Talent Scout", "https://www.linkedin.com/company/eightfold/")
     p = st.all_leads()[0]
     assert (p["title"], p["company"]) == ("Talent Scout", "Eightfold.ai")
+
+
+# ------------------------------------------- abandoned searches (deploy / closed browser)
+def test_abandoned_running_searches_do_not_block_new_ones(tmp_path):
+    import sqlite3
+    from app.storage import MAX_PARALLEL_JOBS, Storage
+    s = Storage(str(tmp_path / "stale.db"))
+    ids = [s.create_job(["Recruiter"], ["Pune"], [], 25) for _ in range(MAX_PARALLEL_JOBS)]
+    with sqlite3.connect(s.path) as c:          # all five went quiet an hour ago
+        c.execute("UPDATE jobs SET started='2000-01-01 00:00:00', updated=''")
+    fresh = s.create_job(["Recruiter"], ["Pune"], [], 25)     # not refused
+    assert s.get_job(fresh)["status"] == "running"
+    for j in ids:
+        job = s.get_job(j)
+        assert job["status"] == "error" and "No news" in job["error"]
+
+
+def test_a_search_sending_news_is_not_closed(tmp_path):
+    import sqlite3
+    from app.storage import Storage
+    s = Storage(str(tmp_path / "live.db"))
+    j = s.create_job(["Recruiter"], ["Pune"], [], 25)
+    with sqlite3.connect(s.path) as c:
+        c.execute("UPDATE jobs SET started='2000-01-01 00:00:00'")
+    s.set_message(j, "page 3")                  # fresh news: still alive
+    s.list_jobs()
+    assert s.get_job(j)["status"] == "running"

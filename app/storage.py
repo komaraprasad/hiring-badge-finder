@@ -29,6 +29,9 @@ IST = timezone(timedelta(hours=5, minutes=30), "IST")
 MAX_PAGES_PER_RUN = 30
 DEFAULT_DAILY_CAP = 300
 MAX_PARALLEL_JOBS = 5
+# A running search with no news (page, message, company page) for this long was abandoned: the
+# browser was closed or the server restarted (e.g. a Render deploy). It must not block new searches.
+STALE_JOB_MINUTES = 15
 MAX_DETAIL_PAGES_PER_RUN = 60       # at least; a run may use 2 per requested lead + 10 (Experience + About page)
 MAX_DETAIL_PAGES_PER_DAY = 600      # 2 per person at the 300-people-a-day limit (separate from search pages)
 COMPANY_STATUSES = ("found", "not_found")
@@ -229,6 +232,8 @@ class Storage:
                 conn.execute("ALTER TABLE jobs ADD COLUMN detail_pages INTEGER NOT NULL DEFAULT 0")
             if "start_page" not in have:
                 conn.execute("ALTER TABLE jobs ADD COLUMN start_page INTEGER NOT NULL DEFAULT 1")
+            if "updated" not in have:          # last news from the extension ('' = only `started`)
+                conn.execute("ALTER TABLE jobs ADD COLUMN updated TEXT NOT NULL DEFAULT ''")
             for k, v in DEFAULT_SETTINGS.items():
                 conn.execute("INSERT OR IGNORE INTO settings(key, value) VALUES(?, ?)", (k, v))
         finally:
@@ -293,6 +298,7 @@ class Storage:
         """Create a job. Raises RuntimeError when 5 searches already run."""
         job_id = uuid.uuid4().hex[:12]
         with self._tx() as c:
+            self._close_stale(c)
             n = c.execute("SELECT COUNT(*) FROM jobs WHERE status='running'").fetchone()[0]
             if n >= MAX_PARALLEL_JOBS:
                 raise RuntimeError(f"Already {MAX_PARALLEL_JOBS} searches running. Stop one or wait.")
@@ -312,7 +318,21 @@ class Storage:
             r = c.execute("SELECT * FROM jobs WHERE job_id=?", (job_id,)).fetchone()
         return self._job_dict(r) if r else None
 
+    @staticmethod
+    def _close_stale(c) -> None:
+        """End running searches that have sent nothing for STALE_JOB_MINUTES (inside a write)."""
+        cutoff = (datetime.now(IST) - timedelta(minutes=STALE_JOB_MINUTES)).strftime("%Y-%m-%d %H:%M:%S")
+        c.execute("UPDATE jobs SET status='error', end_reason='no news', finished=?, error=?"
+                  " WHERE status='running' AND (CASE WHEN updated<>'' THEN updated ELSE started END) < ?",
+                  (now_ist(), f"No news from the browser for {STALE_JOB_MINUTES} minutes (browser closed, or the"
+                   " server restarted). Launch the search again: it continues where it stopped.", cutoff))
+
+    def close_stale_jobs(self) -> None:
+        with self._tx() as c:
+            self._close_stale(c)
+
     def list_jobs(self, limit: int = 20) -> list[dict]:
+        self.close_stale_jobs()
         with self._read() as c:
             rows = c.execute("SELECT * FROM jobs ORDER BY started DESC, rowid DESC LIMIT ?",
                              (limit,)).fetchall()
@@ -332,7 +352,7 @@ class Storage:
 
     def set_message(self, job_id: str, message: str) -> bool:
         with self._tx() as c:
-            cur = c.execute("UPDATE jobs SET message=? WHERE job_id=?", (message[:500], job_id))
+            cur = c.execute("UPDATE jobs SET message=?, updated=? WHERE job_id=?", (message[:500], now_ist(), job_id))
             return cur.rowcount > 0
 
     def set_error(self, job_id: str, message: str) -> bool:
@@ -517,7 +537,7 @@ class Storage:
             sets = ", ".join(f"{k}=?" for k in JOB_COUNTERS)
             args = [counters[k] for k in JOB_COUNTERS]
             if cont:
-                c.execute(f"UPDATE jobs SET {sets} WHERE job_id=?", (*args, job_id))
+                c.execute(f"UPDATE jobs SET {sets}, updated=? WHERE job_id=?", (*args, stamp, job_id))
             else:
                 c.execute(f"UPDATE jobs SET {sets}, status='done', end_reason=?, finished=? "
                           "WHERE job_id=?", (*args, reason, stamp, job_id))
@@ -629,7 +649,7 @@ class Storage:
             day = c.execute("SELECT count FROM detail_pages_by_day WHERE day=?", (today_ist(),)).fetchone()
             if not run or run[0] >= per_run or (day[0] if day else 0) >= per_day:
                 return False
-            c.execute("UPDATE jobs SET detail_pages=detail_pages+1 WHERE job_id=?", (job_id,))
+            c.execute("UPDATE jobs SET detail_pages=detail_pages+1, updated=? WHERE job_id=?", (now_ist(), job_id))
             c.execute("INSERT INTO detail_pages_by_day(day, count) VALUES(?, 1)"
                       " ON CONFLICT(day) DO UPDATE SET count=count+1", (today_ist(),))
             return True

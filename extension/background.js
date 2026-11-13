@@ -75,7 +75,23 @@ function updateJobs(change) {
 }
 
 // -------------------------------------------------------------- server calls
+// While a hosted server restarts (e.g. a Render deploy, ~30-90 s) calls fail with no answer or with the
+// host's 502/503/504 page. Those are retried for up to ~2 minutes so a running search survives it.
+// A call that timed out after reaching the server is NOT retried (it may have been saved already).
+const RETRY_STATUSES = [502, 503, 504];
+const RETRY_WAITS_MS = [3000, 6000, 10000, 15000, 20000, 25000, 25000];   // each < 30 s: an idle worker may be stopped
+
 async function callServer(path, method, body, serverUrl) {
+  let r = await callServerOnce(path, method, body, serverUrl);
+  for (const wait of RETRY_WAITS_MS) {
+    if (!(r.unreachable || RETRY_STATUSES.includes(r.status))) break;
+    await new Promise((done) => setTimeout(done, wait));
+    r = await callServerOnce(path, method, body, serverUrl);
+  }
+  return r;
+}
+
+async function callServerOnce(path, method, body, serverUrl) {
   const base = (serverUrl || await getServerUrl()).replace(/\/+$/, '');
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), API_TIMEOUT_MS);
@@ -90,7 +106,9 @@ async function callServer(path, method, body, serverUrl) {
     try { json = await res.json(); } catch (e) { /* no body */ }
     return { ok: res.ok, status: res.status, json, url: base };
   } catch (e) {
-    return { ok: false, status: 0, error: String(e && e.message || e), url: base };
+    // No answer at all (connection refused / reset): safe to retry. A timeout (abort) is not.
+    return { ok: false, status: 0, error: String(e && e.message || e), url: base,
+             unreachable: !ctl.signal.aborted };
   } finally {
     clearTimeout(timer);
   }

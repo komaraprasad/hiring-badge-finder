@@ -32,7 +32,7 @@ The server never talks to LinkedIn. It stores no LinkedIn cookies and does no lo
 
 ## Version
 
-Extension **1.44.0** (`extension/manifest.json`). The dashboard refuses to launch with an older extension and tells you
+Extension **1.45.0** (`extension/manifest.json`). The dashboard refuses to launch with an older extension and tells you
 to click **Reload** in `edge://extensions`.
 
 ## Install (Windows 11 + Edge)
