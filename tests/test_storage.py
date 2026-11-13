@@ -379,9 +379,11 @@ def test_open_storage_sqlite_url(tmp_path):
     assert s.count_people() == 0
 
 
-def test_open_storage_postgres_not_built_yet():
-    with pytest.raises(NotImplementedError):
-        open_storage("postgresql://u:p@h/db")
+def test_open_storage_chooses_postgres(monkeypatch):
+    import app.pgstorage
+    monkeypatch.setattr(app.pgstorage, "PostgresStorage", lambda url: ("pg", url))   # no real connection
+    assert open_storage("postgresql://u:p@h/db") == ("pg", "postgresql://u:p@h/db")
+    assert open_storage("postgres://u:p@h/db") == ("pg", "postgres://u:p@h/db")
 
 
 def test_open_storage_rejects_unknown():
@@ -674,11 +676,10 @@ def test_profile_title_fills_an_empty_designation(st):
 
 # ------------------------------------------- abandoned searches (deploy / closed browser)
 def test_abandoned_running_searches_do_not_block_new_ones(tmp_path):
-    import sqlite3
-    from app.storage import MAX_PARALLEL_JOBS, Storage
+    from app.storage import MAX_PARALLEL_JOBS
     s = Storage(str(tmp_path / "stale.db"))
     ids = [s.create_job(["Recruiter"], ["Pune"], [], 25) for _ in range(MAX_PARALLEL_JOBS)]
-    with sqlite3.connect(s.path) as c:          # all five went quiet an hour ago
+    with s._tx() as c:                          # all five went quiet long ago
         c.execute("UPDATE jobs SET started='2000-01-01 00:00:00', updated=''")
     fresh = s.create_job(["Recruiter"], ["Pune"], [], 25)     # not refused
     assert s.get_job(fresh)["status"] == "running"
@@ -688,11 +689,9 @@ def test_abandoned_running_searches_do_not_block_new_ones(tmp_path):
 
 
 def test_a_search_sending_news_is_not_closed(tmp_path):
-    import sqlite3
-    from app.storage import Storage
     s = Storage(str(tmp_path / "live.db"))
     j = s.create_job(["Recruiter"], ["Pune"], [], 25)
-    with sqlite3.connect(s.path) as c:
+    with s._tx() as c:
         c.execute("UPDATE jobs SET started='2000-01-01 00:00:00'")
     s.set_message(j, "page 3")                  # fresh news: still alive
     s.list_jobs()

@@ -90,6 +90,13 @@ def _website_worker() -> None:
 
 
 @app.on_event("startup")
+def _warn_without_database() -> None:
+    if os.environ.get("RENDER") and not os.environ.get("DATABASE_URL"):
+        print("WARNING: DATABASE_URL is not set. Leads are kept in a local file that Render deletes on every "
+              "restart. Set DATABASE_URL to your Neon connection string (see DEPLOY.md).", flush=True)
+
+
+@app.on_event("startup")
 def _start_website_worker() -> None:
     if os.environ.get("HBF_WEBSITE_LOOKUP", "1") == "1":
         threading.Thread(target=_website_worker, name="website-worker", daemon=True).start()

@@ -3,7 +3,7 @@
 All database access in the project goes through the `Storage` class, so a
 Postgres version can be added later by writing another class with the same
 methods and choosing it from the DATABASE_URL environment variable
-(see `open_storage`). Only SQLite is implemented today.
+(see `open_storage`). SQLite (default) and Postgres (app/pgstorage.py) are implemented.
 
 SQLite runs in WAL mode with busy_timeout 30000, one short connection per call,
 and every write sits inside BEGIN IMMEDIATE, so parallel requests are safe.
@@ -776,7 +776,6 @@ def open_storage(database_url: str | None = None) -> Storage:
     if url.startswith("sqlite:///"):
         return Storage(url[len("sqlite:///"):])
     if url.startswith(("postgres://", "postgresql://")):
-        raise NotImplementedError(
-            "Postgres is not built yet. Add a Storage class with the same methods "
-            "and return it here.")
+        from .pgstorage import PostgresStorage      # e.g. a free Neon database (see DEPLOY.md)
+        return PostgresStorage(url)
     raise ValueError(f"Unsupported DATABASE_URL: {url.split(':')[0]}")

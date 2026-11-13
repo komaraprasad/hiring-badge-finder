@@ -1,11 +1,12 @@
-# Render Blueprint for Hiring Badge Finder (see DEPLOY.md).
-# One web service + one persistent disk for the SQLite database.
+# Render Blueprint for Hiring Badge Finder (see DEPLOY.md). FREE: no card needed.
+# The leads live in a free Neon Postgres database (DATABASE_URL), because a free Render
+# service has no disk: its files are wiped on every restart.
 services:
   - type: web
     name: hiring-badge-finder
     runtime: python
-    plan: starter            # a persistent disk needs a paid instance; the free plan loses data on restart
-    numInstances: 1          # SQLite on one disk: never scale beyond one instance
+    plan: free
+    numInstances: 1
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips "*"
     healthCheckPath: /api/extension/info
@@ -13,12 +14,7 @@ services:
       - key: PYTHON_VERSION
         value: 3.12.8
       - key: DATABASE_URL
-        value: sqlite:////var/data/hiring_badge_finder.db
+        sync: false            # Render asks for it: paste the Neon connection string (postgresql://...)
       - key: HBF_WEBSITE_LOOKUP
         value: "1"
       # RENDER_EXTERNAL_URL is set by Render automatically; the server trusts only that address.
-      # Using a custom domain? Set HBF_PUBLIC_URL to it (https://..., no trailing slash).
-    disk:
-      name: hbf-data
-      mountPath: /var/data
-      sizeGB: 1
