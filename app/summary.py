@@ -14,6 +14,8 @@ def summary_line(job: dict) -> str:
     if job.get("old_roles"):
         parts.insert(1, f"{job['old_roles']} with only older open roles")
     pages = job["pages"]
+    if job.get("skill_dropped"):
+        parts.insert(0, f"{job['skill_dropped']} not hiring for the skill (removed)")
     return (f"{job['saved']} of {job['target']} saved · read {job['total_read']} people on "
             f"{pages} page{'s' if pages != 1 else ''} · filtered out: " + ", ".join(parts))
 

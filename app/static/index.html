@@ -1082,7 +1082,7 @@
   function refreshFinal() {
     const id = jobId; if (!id) return;
     const once = () => { if (jobId === id) api('/api/status?job_id=' + encodeURIComponent(id)).then(showJob).catch(() => {}); };
-    once(); setTimeout(once, 2500);
+    once(); setTimeout(() => { once(); loadResults(); }, 2500);
   }
   // Overall completion: half for finding the leads, half for reading their company details.
   // 100% only when the search has ended AND every saved lead has had its details read.
@@ -1113,6 +1113,7 @@
   function trackDetails(msg) {
     const m = String(msg || '');
     if (!/^(Company|Lead) details/.test(m)) return;
+    if (/ · not kept \(/.test(m)) loadResults();     // skill search: that lead was removed, refresh the feed
     const wasFilling = detailsFilling;
     detailsFilling = !/^(Company|Lead) details: done|^(Company|Lead) details stopped/.test(m);
     if (wasFilling && !detailsFilling) refreshFinal();   // the last leads' counts may land after the 3 s poll

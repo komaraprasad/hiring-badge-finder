@@ -567,12 +567,23 @@ def details_fast(body: FastBody):
         db().save_profile_company(body.job_id, d.person_id, company, " ".join(d.title.split()), url,
                                   " ".join(d.note.split()))
         roles = [" ".join(r.split())[:200] for r in d.open_roles if r and r.strip()][:5]
-        if roles or d.roles_status == "none":      # only a real read is saved; unknown stays blank, never "No open role"
+        read = bool(roles) or d.roles_status == "none"
+        if read:                                    # only a real read is saved; unknown stays blank, never "No open role"
             db().set_hiring_for(body.job_id, d.person_id, roles)
+        dropped = ""
+        skills = [k for k in (job.get("keywords") or []) if (k or "").strip()]
+        if skills and read:
+            # Skill searches keep ONLY people whose open role is for that skill (in a searched place):
+            # LinkedIn's keyword search also returns anyone who mentions it anywhere on the profile.
+            from .storage import open_role_match
+            if open_role_match(" | ".join(roles), skills, job.get("locations") or []) != "Yes":
+                if db().drop_lead(body.job_id, d.person_id):
+                    dropped = f" · not kept (open role not for {', '.join(skills[:3])})" if roles else \
+                              " · not kept (no open role)"
         bus.publish("heartbeat", {"job_id": body.job_id, "message": "Lead details: " + (
             f"{company}: {', '.join(x for x in (industry, size) if x)}" if company and (industry or size)
             else company or f"no current company ({d.note or 'not shown'})")
-            + (f" · hiring for {roles[0].split(' · ')[0]}" if roles else "")})
+            + (f" · hiring for {roles[0].split(' · ')[0]}" if roles else "") + dropped})
         _note_open_roles(body.job_id, bool(roles), d.roles_status, " ".join(d.roles_hint.split()))
     if job["status"] in ("stopped", "error"):
         return {"status": job["status"], "task": None, "stop": "the search was stopped"}
