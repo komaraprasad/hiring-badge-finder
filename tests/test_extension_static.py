@@ -62,13 +62,26 @@ def _without_lead_reader(text):
 
 def test_fast_reader_only_reads_linkedins_profile_data_and_keeps_nothing():
     text = (EXT / "background.js").read_text(encoding="utf-8")
-    fn = text[text.index("async function readLeadInPage"):text.index("async function startFastDetails")]
+    fn = text[text.index("async function readLeadInPage"):text.index("async function readOpenRolesInPage")]
     assert fn.count("fetch(") == 1                       # one request: the configured profile-data path
     assert "pathTemplate" in fn and "http" not in fn.split("fetch(")[1].split(")")[0]   # relative: LinkedIn only
     for banned in ("callServer", "chrome.", "localStorage", "sessionStorage", "postMessage", "XMLHttpRequest"):
         assert banned not in fn, banned                  # the session value is used as a header, never stored or sent
     cfg = (EXT / "config.js").read_text(encoding="utf-8")
     assert "profileUrl: '/voyager/api/identity/dash/profiles?" in cfg
+
+
+def test_open_roles_reader_is_one_relative_profile_page_request_and_keeps_nothing():
+    """1.49.0: open roles come from the person's own profile page HTML: one request, LinkedIn only,
+    no cookie read, nothing stored or sent anywhere by the reader itself."""
+    text = (EXT / "background.js").read_text(encoding="utf-8")
+    fn = text[text.index("async function readOpenRolesInPage"):text.index("async function startFastDetails")]
+    assert fn.count("fetch(") == 1
+    target = fn.split("fetch(")[1].split(",")[0]
+    assert target.startswith("'/in/'") and "http" not in target
+    for banned in ("document.cookie", "callServer", "chrome.", "localStorage", "sessionStorage", "postMessage",
+                   "XMLHttpRequest", "click(", "window.open", "location.href ="):
+        assert banned not in fn, banned
 
 
 def test_no_secrets_or_external_calls_in_extension():

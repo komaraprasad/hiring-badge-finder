@@ -623,6 +623,73 @@ async function readLeadInPage(slug, pathTemplate) {
            pageName: String(co.name || ''), url, industry, size, why: url ? '' : 'current job has no LinkedIn company page', ...extra };
 }
 
+/** Open roles ("Hiring: <job> · <company> · <place>") from the person's own profile page, fetched as
+ *  plain HTML in the background (no tab, nothing rendered, nothing clicked): ONE light request.
+ *  LinkedIn's profile data (readLeadInPage) does not carry them; the page's "Hiring:" box does.
+ *  status: 'found' | 'none' (page read, no sign of an open role) | 'unknown' (hiring shown, not readable). */
+async function readOpenRolesInPage(slug) {
+  let res;
+  try {
+    res = await fetch('/in/' + encodeURIComponent(slug) + '/', { credentials: 'include', headers: { accept: 'text/html' } });
+  } catch (e) { return { kind: 'ok', status: 'unknown', hint: 'request failed' }; }
+  const path = (() => { try { return new URL(res.url).pathname; } catch (e) { return ''; } })();
+  if (/^\/(checkpoint|authwall|login|uas)\b/.test(path)) return { kind: 'limit', text: 'LinkedIn is asking for a sign-in or security check.' };
+  if (res.status === 429 || res.status === 999) return { kind: 'limit', text: `LinkedIn refused the request (status ${res.status}).` };
+  if (!res.ok) return { kind: 'ok', status: 'unknown', hint: 'status ' + res.status };
+  const html = await res.text();
+  const clean = (s) => String(s || '').replace(/\\u002[66]/g, '&').replace(/\\n|\\t/g, ' ').replace(/&amp;/g, '&')
+    .replace(/&#39;|&#x27;/g, "'").replace(/&quot;/g, '"').replace(/\s+/g, ' ').trim();
+  const roles = [];
+  const add = (title, company, place) => {
+    title = clean(title); company = clean(company); place = clean(place);
+    if (!title || title.length > 150 || /^(show job|see open roles|open roles)$/i.test(title)) return;
+    if (roles.some((r) => r.title.toLowerCase() === title.toLowerCase())) return;
+    roles.push({ title, company, place });
+  };
+  // 1) JSON blobs inside the page (<code> elements / embedded state): job postings with a title.
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  const walk = (o, depth) => {
+    if (!o || typeof o !== 'object' || depth > 40) return;
+    if (Array.isArray(o)) { o.forEach((x) => walk(x, depth + 1)); return; }
+    const t = String(o.$type || '');
+    if (/(JobPosting|HiringOpportunit)/i.test(t)) {
+      const tt = (v) => (typeof v === 'string' ? v : (v && typeof v.text === 'string' ? v.text : ''));
+      add(tt(o.title) || tt(o.jobTitle), tt(o.companyName), tt(o.formattedLocation) || tt(o.location));
+    }
+    Object.values(o).forEach((v) => walk(v, depth + 1));
+  };
+  for (const c of doc.querySelectorAll('code, script[type="application/json"]')) {
+    const s = (c.textContent || '').trim();
+    if (!s || (s[0] !== '{' && s[0] !== '[') || !/(JobPosting|HiringOpportunit)/i.test(s)) continue;
+    try { walk(JSON.parse(s), 0); } catch (e) { /* not JSON */ }
+  }
+  // 2) The visible "Hiring: <title>" box: its text, then company · place on the next line.
+  if (!roles.length) {
+    const text = html.replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>/gi, ' ').replace(/<[^>]+>/g, '\n')
+      .split('\n').map(clean).filter(Boolean);
+    for (let i = 0; i < text.length; i++) {
+      const m = text[i].match(/^Hiring:\s*(.+)$/i) || (/^Hiring:?$/i.test(text[i]) && text[i + 1] ? [0, text[++i]] : null);
+      if (!m) continue;
+      const next = text[i + 1] || '';
+      const parts = /show job/i.test(next) ? [] : next.split(/\s*·\s*/);
+      add(m[1], parts[0] || '', parts.slice(1).join(' · '));
+    }
+  }
+  // 3) Embedded JSON strings for the same box ("Hiring: Recruiter" inside script data).
+  if (!roles.length) {
+    const re = /"(?:text|title|accessibilityText)"\s*:\s*"Hiring:\s*([^"\\]{2,150})"/g;
+    let m;
+    while ((m = re.exec(html)) && roles.length < 5) add(m[1], '', '');
+  }
+  const openRoles = roles.slice(0, 5).map((r) => [r.title, r.company, r.place].filter(Boolean).join(' · ').slice(0, 200));
+  if (openRoles.length) return { kind: 'ok', status: 'found', openRoles };
+  const signs = /\/jobs\/view\/|hiring-opportunities|Open roles|"Hiring:|>\s*Hiring:/i.test(html);
+  if (!signs) return { kind: 'ok', status: 'none', openRoles: [] };
+  const at = html.search(/Hiring:|hiring-opportunities|\/jobs\/view\//i);
+  const hint = clean(html.slice(Math.max(0, at - 150), at + 250).replace(/<[^>]+>/g, ' ')).slice(0, 300);
+  return { kind: 'ok', status: 'unknown', openRoles: [], hint };
+}
+
 async function startFastDetails(tabId) {
   const j = (await getJobs())[tabId];
   if (!j || !j.fast) return;
@@ -714,10 +781,36 @@ async function fastReader(tabId, k) {
       continue;                                                       // the server hands this lead out again later
     }
     formatFails = 0;
+    // Open roles: not in LinkedIn's profile data, so one more light request (the profile page's HTML)
+    // after a short random pause. Its own notice check stops the run exactly like the one above.
+    let rolesStatus = (got.openRoles || []).length ? 'found' : 'unknown';
+    let rolesHint = '';
+    if (rolesStatus !== 'found' && fd.openRoles !== false) {
+      await new Promise((res) => setTimeout(res, 500 + Math.round(Math.random() * 700)));
+      lastRead = Date.now();
+      let r2;
+      try {
+        const [res] = await chrome.scripting.executeScript({ target: { tabId }, func: readOpenRolesInPage,
+                                                             args: [decodeURIComponent(slug)] });
+        r2 = (res && res.result) || { kind: 'ok', status: 'unknown', hint: 'no answer from the page' };
+      } catch (e) { r2 = { kind: 'ok', status: 'unknown', hint: 'helper tab not ready' }; }
+      if (r2.kind === 'limit') {
+        await fastStop(tabId, { fastStop: true, fastWhy: 'LinkedIn showed a notice' });
+        await companyBeat(j, 'Lead details stopped: ' + r2.text);
+        await callServer('/api/error', 'POST', { job_id: j.jobId, message: 'LinkedIn showed a notice while reading open roles: ' + r2.text }, j.serverUrl);
+        try { await chrome.tabs.update(tabId, { url: 'https://www.linkedin.com/feed/' }); } catch (e) { /* closed */ }
+        await showTab(tabId);
+        return;
+      }
+      rolesStatus = r2.status || 'unknown';
+      rolesHint = r2.hint || '';
+      got.openRoles = r2.openRoles || [];
+    }
     done = { person_id: task.person_id, company: (got.company || '').slice(0, 200), title: (got.title || '').slice(0, 200),
              company_url: got.url || '', page_name: (got.pageName || '').slice(0, 200), industry: (got.industry || '').slice(0, 120),
              size: (got.size || '').slice(0, 60), note: (got.why || '').slice(0, 300),
-             open_roles: (got.openRoles || []).slice(0, 5), role_types: (got.roleTypes || []).slice(0, 10) };
+             open_roles: (got.openRoles || []).slice(0, 5), role_types: (got.roleTypes || []).slice(0, 10),
+             roles_status: rolesStatus, roles_hint: rolesHint.slice(0, 300) };
   }
 }
 

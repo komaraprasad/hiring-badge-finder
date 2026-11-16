@@ -505,6 +505,8 @@ class FastDone(BaseModel):
     note: str = Field("", max_length=300)
     open_roles: list[str] = Field(default_factory=list, max_length=5)    # "Title · Company · Place", from the same data
     role_types: list[str] = Field(default_factory=list, max_length=10)   # LinkedIn data types seen (no personal data)
+    roles_status: str = Field("", max_length=10)      # found / none / unknown ('' = an older extension)
+    roles_hint: str = Field("", max_length=300)       # unreadable "Hiring" box: the text around it, for the run log
 
 
 class FastBody(BaseModel):
@@ -515,18 +517,21 @@ class FastBody(BaseModel):
 _ROLE_STATS: dict[str, dict] = {}    # job_id -> {"read", "found", "said"}: one run-log line about open roles
 
 
-def _note_open_roles(job_id: str, found: bool, types: list[str]) -> None:
-    """Say once per run whether LinkedIn's profile data carries open roles (read with no extra request)."""
-    s = _ROLE_STATS.setdefault(job_id, {"read": 0, "found": 0, "said": False})
+def _note_open_roles(job_id: str, found: bool, status: str, hint: str) -> None:
+    """Run log, once per run: open roles are being read, or (after 5 leads) why they are not."""
+    s = _ROLE_STATS.setdefault(job_id, {"read": 0, "found": 0, "unknown": 0, "hint": "", "said": False})
     s["read"] += 1
     s["found"] += int(found)
+    if status == "unknown":
+        s["unknown"] += 1
+        s["hint"] = s["hint"] or hint
     if s["said"]:
         return
     if s["found"]:
-        msg = "Open roles: read from LinkedIn's profile data (no extra requests)"
-    elif s["read"] >= 10:
-        seen = ", ".join(t.rsplit(".", 1)[-1] for t in types[:5]) or "none"
-        msg = f"Open roles: none in LinkedIn's profile data for the first 10 leads (hiring data types seen: {seen})"
+        msg = "Open roles: reading each lead's \"Hiring:\" box from their profile page"
+    elif s["read"] >= 5 and s["unknown"]:
+        msg = ("Open roles: could not read the \"Hiring:\" box on the profile page (left blank)"
+               + (f". Page text near it: {s['hint'][:200]}" if s["hint"] else ""))
     else:
         return
     s["said"] = True
@@ -562,12 +567,13 @@ def details_fast(body: FastBody):
         db().save_profile_company(body.job_id, d.person_id, company, " ".join(d.title.split()), url,
                                   " ".join(d.note.split()))
         roles = [" ".join(r.split())[:200] for r in d.open_roles if r and r.strip()][:5]
-        db().set_hiring_for(body.job_id, d.person_id, roles)
+        if roles or d.roles_status == "none":      # only a real read is saved; unknown stays blank, never "No open role"
+            db().set_hiring_for(body.job_id, d.person_id, roles)
         bus.publish("heartbeat", {"job_id": body.job_id, "message": "Lead details: " + (
             f"{company}: {', '.join(x for x in (industry, size) if x)}" if company and (industry or size)
             else company or f"no current company ({d.note or 'not shown'})")
             + (f" · hiring for {roles[0].split(' · ')[0]}" if roles else "")})
-        _note_open_roles(body.job_id, bool(roles), d.role_types)
+        _note_open_roles(body.job_id, bool(roles), d.roles_status, " ".join(d.roles_hint.split()))
     if job["status"] in ("stopped", "error"):
         return {"status": job["status"], "task": None, "stop": "the search was stopped"}
     if not COMPANY_DETAILS_ON:

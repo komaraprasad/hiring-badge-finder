@@ -451,7 +451,8 @@ def test_open_roles_from_the_profile_data_are_saved_matched_and_filtered(client)
     t3 = client.post("/api/details/fast", json={"job_id": job, "done": {
         "person_id": t2["person_id"], "company": "Daasho", "title": "TA",
         "open_roles": ["Business Development Executive (BDE) · Daasho · Chennai (On-site)"]}}).json()["task"]
-    client.post("/api/details/fast", json={"job_id": job, "done": {"person_id": t3["person_id"], "company": "Globex"}})
+    client.post("/api/details/fast", json={"job_id": job, "done": {"person_id": t3["person_id"], "company": "Globex",
+                                                                     "roles_status": "none"}})
     leads = {p["id"]: p for p in client.get("/api/leads", params={"job_id": job}).json()["items"]}
     assert leads[t1["person_id"]]["hiring_for"].startswith("Senior Java Developer")
     assert [leads[t["person_id"]]["open_role_match"] for t in (t1, t2, t3)] == ["Yes", "No", "No open role"]
@@ -462,11 +463,30 @@ def test_open_roles_from_the_profile_data_are_saved_matched_and_filtered(client)
 
 
 def test_old_fast_payload_without_open_roles_still_works(client):
-    """A 1.47 extension sends no open_roles: nothing breaks, the lead is simply 'No open role'."""
+    """A 1.47 extension sends no open_roles: nothing breaks, and the lead is NOT called 'No open role'."""
     job = start(client).json()["job_id"]
     client.post("/api/ingest", json={"job_id": job, "people": [person(1)]})
     t = client.post("/api/details/fast", json={"job_id": job}).json()["task"]
     r = client.post("/api/details/fast", json={"job_id": job, "done": {"person_id": t["person_id"], "company": "Acme"}})
     assert r.status_code == 200
     lead = client.get("/api/leads", params={"job_id": job}).json()["items"][0]
-    assert (lead["hiring_for"], lead["open_role_match"]) == ("", "No open role")
+    assert (lead["hiring_for"], lead["open_role_match"]) == ("", "")      # not read: blank, never "No open role"
+
+
+def test_unreadable_hiring_box_stays_blank_and_the_run_log_says_why(client):
+    job = start(client).json()["job_id"]
+    client.post("/api/ingest", json={"job_id": job, "people": [person(n) for n in range(1, 6)]})
+    t = client.post("/api/details/fast", json={"job_id": job}).json()["task"]
+    seen = []
+    orig = main.bus.publish
+    main.bus.publish = lambda kind, data: (seen.append(data.get("message", "")), orig(kind, data))
+    try:
+        for _ in range(5):
+            t = client.post("/api/details/fast", json={"job_id": job, "done": {
+                "person_id": t["person_id"], "company": "Acme", "roles_status": "unknown",
+                "roles_hint": "Hiring something odd"}}).json()["task"] or t
+    finally:
+        main.bus.publish = orig
+    leads = client.get("/api/leads", params={"job_id": job}).json()["items"]
+    assert all(p["open_role_match"] == "" for p in leads)
+    assert any(m.startswith("Open roles: could not read") and "Hiring something odd" in m for m in seen)
