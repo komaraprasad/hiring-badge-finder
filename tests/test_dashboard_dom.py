@@ -520,3 +520,24 @@ def test_overall_bar_never_shows_100_when_details_stop_early():
         assert "company details 10 / 25" in pg.inner_text("#overallText")
     finally:
         p.close()
+
+
+def test_overall_bar_catches_up_when_done_arrives_before_the_last_count():
+    """Live case: the poll saw 23/25, then "Lead details: done" arrived. The bar must ask again and
+    reach 100%, not stay at "Ended 96%"."""
+    p = Page(ext_version="1.0.0")
+    try:
+        pg = p.page
+        pg.add_init_script("window.HBF_POLL_MS = 150;")
+        pg.reload()
+        p.job = dict(JOB, target=25, saved=25, status="done", end_reason="target reached", details_done=23,
+                     details_total=25, details_on=True, message="Lead details: Fanatics: Computer Software")
+        pg.fill("#roleInput", "EM"); pg.press("#roleInput", "Enter")
+        pg.fill("#locInput", "Pune"); pg.press("#locInput", "Enter")
+        pg.click("#launchBtn")
+        pg.wait_for_function("document.getElementById('overallPct').textContent === '96%'")
+        p.job = dict(p.job, details_done=25, message="Lead details: done")
+        pg.wait_for_function("document.getElementById('overallPct').textContent === '100%'")
+        assert "Complete" in pg.inner_text("#overallText")
+    finally:
+        p.close()

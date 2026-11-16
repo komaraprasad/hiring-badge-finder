@@ -1069,6 +1069,13 @@
   // While that runs, the Export button says so and asks before exporting half-filled columns.
   var detailsFilling = false;   // var: showJob (above) reads it
   var lastJob = null;           // latest status, for the overall-completion bar
+  // Details just finished: ask for the status again (now and shortly after), so the bar shows the
+  // final count instead of the one from the last poll, which can be a lead or two behind.
+  function refreshFinal() {
+    const id = jobId; if (!id) return;
+    const once = () => { if (jobId === id) api('/api/status?job_id=' + encodeURIComponent(id)).then(showJob).catch(() => {}); };
+    once(); setTimeout(once, 2500);
+  }
   // Overall completion: half for finding the leads, half for reading their company details.
   // 100% only when the search has ended AND every saved lead has had its details read.
   function renderOverall() {
@@ -1098,7 +1105,9 @@
   function trackDetails(msg) {
     const m = String(msg || '');
     if (!/^(Company|Lead) details/.test(m)) return;
+    const wasFilling = detailsFilling;
     detailsFilling = !/^(Company|Lead) details: done|^(Company|Lead) details stopped/.test(m);
+    if (wasFilling && !detailsFilling) refreshFinal();   // the last leads' counts may land after the 3 s poll
     const b = $('runXlsx');
     const label = b.lastChild;
     if (label && label.nodeType === 3) {
