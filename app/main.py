@@ -503,11 +503,34 @@ class FastDone(BaseModel):
     industry: str = Field("", max_length=120)
     size: str = Field("", max_length=60)
     note: str = Field("", max_length=300)
+    open_roles: list[str] = Field(default_factory=list, max_length=5)    # "Title · Company · Place", from the same data
+    role_types: list[str] = Field(default_factory=list, max_length=10)   # LinkedIn data types seen (no personal data)
 
 
 class FastBody(BaseModel):
     job_id: str
     done: FastDone | None = None          # the lead this reader just finished (None on its first call)
+
+
+_ROLE_STATS: dict[str, dict] = {}    # job_id -> {"read", "found", "said"}: one run-log line about open roles
+
+
+def _note_open_roles(job_id: str, found: bool, types: list[str]) -> None:
+    """Say once per run whether LinkedIn's profile data carries open roles (read with no extra request)."""
+    s = _ROLE_STATS.setdefault(job_id, {"read": 0, "found": 0, "said": False})
+    s["read"] += 1
+    s["found"] += int(found)
+    if s["said"]:
+        return
+    if s["found"]:
+        msg = "Open roles: read from LinkedIn's profile data (no extra requests)"
+    elif s["read"] >= 10:
+        seen = ", ".join(t.rsplit(".", 1)[-1] for t in types[:5]) or "none"
+        msg = f"Open roles: none in LinkedIn's profile data for the first 10 leads (hiring data types seen: {seen})"
+    else:
+        return
+    s["said"] = True
+    bus.publish("heartbeat", {"job_id": job_id, "message": msg})
 
 
 def _claim_next(job_id: str) -> dict | None:
@@ -538,9 +561,13 @@ def details_fast(body: FastBody):
                               page_name=" ".join(d.page_name.split()))
         db().save_profile_company(body.job_id, d.person_id, company, " ".join(d.title.split()), url,
                                   " ".join(d.note.split()))
+        roles = [" ".join(r.split())[:200] for r in d.open_roles if r and r.strip()][:5]
+        db().set_hiring_for(body.job_id, d.person_id, roles)
         bus.publish("heartbeat", {"job_id": body.job_id, "message": "Lead details: " + (
             f"{company}: {', '.join(x for x in (industry, size) if x)}" if company and (industry or size)
-            else company or f"no current company ({d.note or 'not shown'})")})
+            else company or f"no current company ({d.note or 'not shown'})")
+            + (f" · hiring for {roles[0].split(' · ')[0]}" if roles else "")})
+        _note_open_roles(body.job_id, bool(roles), d.role_types)
     if job["status"] in ("stopped", "error"):
         return {"status": job["status"], "task": None, "stop": "the search was stopped"}
     if not COMPANY_DETAILS_ON:
@@ -623,25 +650,26 @@ async def events():
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
-def _filters(status, role, location, date, text, job_id, date_from, date_to) -> dict:
+def _filters(status, role, location, date, text, job_id, date_from, date_to, open_match=None) -> dict:
     return {"status": status, "role": role, "location": location, "date": date,
-            "text": text, "job_id": job_id, "date_from": date_from, "date_to": date_to}
+            "text": text, "job_id": job_id, "date_from": date_from, "date_to": date_to,
+            "open_match": open_match in ("1", "true", "yes")}
 
 
 @app.get("/api/leads")
 def leads(status: str | None = None, role: str | None = None, location: str | None = None,
           date: str | None = None, text: str | None = None, job_id: str | None = None,
-          date_from: str | None = None, date_to: str | None = None,
+          date_from: str | None = None, date_to: str | None = None, open_match: str | None = None,
           page: int = 1, page_size: int = 50):
-    return db().list_leads(_filters(status, role, location, date, text, job_id, date_from, date_to),
+    return db().list_leads(_filters(status, role, location, date, text, job_id, date_from, date_to, open_match),
                            page, page_size)
 
 
 @app.get("/api/export.csv")
 def export_csv(status: str | None = None, role: str | None = None, location: str | None = None,
                date: str | None = None, text: str | None = None, job_id: str | None = None,
-               date_from: str | None = None, date_to: str | None = None):
-    people = db().all_leads(_filters(status, role, location, date, text, job_id, date_from, date_to))
+               date_from: str | None = None, date_to: str | None = None, open_match: str | None = None):
+    people = db().all_leads(_filters(status, role, location, date, text, job_id, date_from, date_to, open_match))
     return Response(export.to_csv(people), media_type="text/csv; charset=utf-8",
                     headers={"Content-Disposition": 'attachment; filename="hiring_people.csv"'})
 
@@ -649,8 +677,8 @@ def export_csv(status: str | None = None, role: str | None = None, location: str
 @app.get("/api/export.xlsx")
 def export_xlsx(status: str | None = None, role: str | None = None, location: str | None = None,
                 date: str | None = None, text: str | None = None, job_id: str | None = None,
-                date_from: str | None = None, date_to: str | None = None):
-    people = db().all_leads(_filters(status, role, location, date, text, job_id, date_from, date_to))
+                date_from: str | None = None, date_to: str | None = None, open_match: str | None = None):
+    people = db().all_leads(_filters(status, role, location, date, text, job_id, date_from, date_to, open_match))
     return Response(
         export.to_xlsx(people),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

@@ -196,6 +196,9 @@
   .counters b.bump { color: var(--brand); }
   .bar { height: 4px; background: var(--well); border-radius: 4px; overflow: hidden; margin-top: 14px; }
   .bar > div { height: 100%; width: 0; background: var(--brand); transition: width .6s ease; }
+  .hfor { font-size: 13px; margin-top: 4px; }
+  .hfor .hmatch { color: var(--ok, #15803d); font-weight: 600; white-space: nowrap; }
+  .hfor .hnomatch { opacity: .7; white-space: nowrap; }
   .overall { margin-top: 14px; }
   .overall .bar { height: 8px; margin-top: 6px; }
   .overall-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; font-size: 13px; color: var(--muted, inherit); }
@@ -541,6 +544,8 @@
         <div><label for="fStatus">Status</label>
           <select id="fStatus"><option value="">All</option><option>Badge confirmed</option><option>Likely hiring</option></select></div>
         <div class="suggest" id="fRoleBox"><label for="fRole">Searched role</label><div class="chips mini" id="fRoleChips"><input id="fRole" type="text" autocomplete="off" placeholder="Any"></div><ul hidden></ul></div>
+        <div><label for="fOpen">Open role</label>
+          <select id="fOpen" title="From the person's open roles on LinkedIn. With skills in the search, the open role must name one of them."><option value="">Any</option><option value="1">Matches only</option></select></div>
         <div><label for="fDate">Found on</label><input id="fDate" type="date"></div>
         <button id="fApply" type="button" class="primary" style="height:42px">Apply filters</button>
         <button id="fClear" type="button" style="height:42px">Clear</button>
@@ -769,10 +774,13 @@
     return '<span class="av' + (c ? '' : ' likely') + '">' + esc(initials(p.name)) + '<i>' + (c ? '#HIRING' : 'LIKELY') + '</i></span>'; };
   const chip = (p) => '<span class="status ' + (p.status === 'Badge confirmed' ? 'confirmed' : 'likely') + '">' + esc(p.status) + '</span>';
   const link = (p, body) => '<a href="' + esc(p.profile_url) + '" target="_blank" rel="noopener noreferrer">' + body + '</a>';
+  // Open roles read from the person's LinkedIn profile data (blank for leads from before this was read)
+  const hiringFor = (p) => !p.hiring_for ? '' : '<div class="hfor"><b>Hiring for:</b> ' + esc(p.hiring_for) +
+    (p.open_role_match === 'Yes' ? ' <span class="hmatch">✓ match</span>' : (p.open_role_match === 'No' ? ' <span class="hnomatch">no skill match</span>' : '')) + '</div>';
   // live feed: one card per person
   const cardHtml = (p, fresh) => '<article class="lead' + (fresh ? ' fresh' : '') + '">' + avatar(p) +
     '<div><div class="lead-top">' + link(p, esc(p.name || '(no name)')) + chip(p) + '</div>' +
-    '<div class="hl">' + esc(p.headline) + '</div>' +
+    '<div class="hl">' + esc(p.headline) + '</div>' + hiringFor(p) +
     '<div class="meta">' + (p.company ? '<span><svg><use href="#i-bldg"/></svg>' + esc(p.company) + '</span>' : '') +
     (p.location ? '<span><svg><use href="#i-pin"/></svg>' + esc(p.location) + '</span>' : '') + '</div></div>' +
     '<div class="side"><time>' + esc(p.first_found) + '</time>' +
@@ -781,7 +789,7 @@
   // leads tab: table rows
   const rowHtml = (p) => '<tr><td><div class="who">' + avatar(p) + '<div>' + link(p, esc(p.name || '(no name)')) + '<small class="mono">' + esc(p.first_found) + '</small></div></div></td>' +
     '<td>' + esc(p.headline) + '<small>' + esc(p.company) + '</small></td><td>' + esc(p.location) + '</td>' +
-    '<td>' + chip(p) + '<small>' + esc(p.evidence) + '</small></td>' +
+    '<td>' + chip(p) + '<small>' + esc(p.evidence) + '</small>' + hiringFor(p) + '</td>' +
     '<td><a class="profile-link" href="' + esc(p.profile_url) + '" target="_blank" rel="noopener noreferrer" aria-label="Open profile"><svg><use href="#i-ext"/></svg></a></td></tr>';
   const HEAD = '<thead><tr><th>Person</th><th>Headline · company</th><th>Location</th><th>Hiring status</th><th></th></tr></thead>';
 
@@ -1229,7 +1237,7 @@
 
   // ------------------------------------------------------- Leads tab
   function exFilters() {
-    const f = { text: $('fText').value.trim(), status: $('fStatus').value, role: roleMulti.value(), location: locMulti.value(), date: $('fDate').value };
+    const f = { text: $('fText').value.trim(), status: $('fStatus').value, role: roleMulti.value(), location: locMulti.value(), date: $('fDate').value, open_match: $('fOpen').value };
     const qs = new URLSearchParams(); Object.entries(f).forEach(([k, v]) => { if (v) qs.set(k, v); });
     return qs;
   }
@@ -1249,7 +1257,7 @@
     } catch (e) { $('exEmpty').textContent = e.message; $('exEmpty').classList.remove('hidden'); }
   }
   $('fApply').onclick = () => { resPage = 1; loadExplorer(); };
-  $('fClear').onclick = () => { ['fText', 'fStatus', 'fRole', 'fLoc', 'fDate'].forEach((i) => { $(i).value = ''; }); roleMulti.clear(); locMulti.clear(); resPage = 1; loadExplorer(); };
+  $('fClear').onclick = () => { ['fText', 'fStatus', 'fRole', 'fLoc', 'fDate', 'fOpen'].forEach((i) => { $(i).value = ''; }); roleMulti.clear(); locMulti.clear(); resPage = 1; loadExplorer(); };
   $('prevBtn').onclick = () => { resPage = Math.max(1, resPage - 1); loadExplorer(); };
   $('nextBtn').onclick = () => { resPage += 1; loadExplorer(); };
   ['fText', 'fRole', 'fLoc'].forEach((i) => $(i).addEventListener('keydown', (e) => {

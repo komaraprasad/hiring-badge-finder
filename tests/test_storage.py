@@ -315,7 +315,8 @@ def test_csv_columns_exact_and_values(st):
     assert rows[0] == ["Person Name", "Current Designation", "Headline", "Location", "Location Matches Search",
                        "Person LinkedIn URL", "Hiring Status",
                        "Company Name", "Company Industry", "Company Size", "Company Website",
-                       "Source Platform", "Date Collected (IST)", "Last Verified Date (IST)"]
+                       "Source Platform", "Date Collected (IST)", "Last Verified Date (IST)",
+                       "Hiring For (Open Roles)", "Open Role Matches"]
     for gone in ("Hiring Role(s)", "Headline Has Searched Title", "Business Email", "Hiring For", "Hiring Company", "Posted"):          # removed on request
         assert gone not in rows[0]
     for gone in ("Hiring Signal Type", "Hiring Evidence", "Qualification Reason", "Email Status", "Email Source"):
@@ -428,7 +429,7 @@ def test_xlsx_is_a_formatted_table_with_links_and_dates(st):
     j = new_job(st)
     st.ingest(j, [person(1), person(2, name="=cmd")])
     ws = load_workbook(io.BytesIO(export.to_xlsx(st.all_leads()))).active
-    assert list(ws.tables) == ["HiringPeople"] and ws.tables["HiringPeople"].ref == "A1:N3"
+    assert list(ws.tables) == ["HiringPeople"] and ws.tables["HiringPeople"].ref == "A1:P3"
     assert ws.freeze_panes == "B2"
     hdr = [c.value for c in ws[1]]
     url = ws.cell(row=2, column=hdr.index("Person LinkedIn URL") + 1)
@@ -710,3 +711,23 @@ def test_detail_progress_counts_saved_leads_whose_company_was_looked_up(st):
     st.save_profile_company(j, ids[1], "", "", "")                 # profile showed no current job: still done
     assert st.detail_progress(j) == {"done": 2, "total": 3}
     assert st.detail_progress(other) == {"done": 0, "total": 1}
+
+
+def test_open_role_match_rules():
+    from app.storage import open_role_match
+    assert open_role_match("", ["Java"]) == "No open role"
+    assert open_role_match("Business Development Executive · Daasho", []) == "Yes"     # no skills asked: any role
+    assert open_role_match("Senior Java Developer · Acme", ["java"]) == "Yes"
+    assert open_role_match("JavaScript Engineer · Acme", ["Java"]) == "No"              # whole words only
+    assert open_role_match("Backend (Spring Boot) Lead", ["Java", "Spring Boot"]) == "Yes"
+    assert open_role_match("C++ Developer", ["C"]) == "No"
+
+
+def test_leads_from_before_open_roles_show_nothing(st):
+    j = new_job(st)
+    st.ingest(j, [person(1), person(2)])
+    a, b = [p["id"] for p in st.all_leads({"job_id": j})]
+    st.set_hiring_for(j, a, [])
+    by = {p["id"]: p for p in st.all_leads({"job_id": j})}
+    assert by[a]["open_role_match"] == "No open role"       # read: none shown
+    assert by[b]["open_role_match"] == ""                   # never read (older lead): blank, not "No"

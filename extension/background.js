@@ -593,10 +593,25 @@ async function readLeadInPage(slug, pathTemplate) {
   const inc = Array.isArray(data.included) ? data.included : [];
   if (!inc.some((e) => /identity\.profile\.Profile$/.test(e.$type || ''))) return { kind: 'format', text: 'no profile in the data' };
   const byUrn = new Map(inc.filter((e) => e.entityUrn).map((e) => [e.entityUrn, e]));
+  // Open roles ("Hiring: <job>"), ONLY if LinkedIn already put them in this same answer: no extra request.
+  const txt = (v) => (typeof v === 'string' ? v : (v && typeof v.text === 'string' ? v.text : '')).replace(/\s+/g, ' ').trim();
+  const roleTypes = [];
+  const roles = [];
+  for (const e of inc) {
+    const t = String(e.$type || '');
+    if (!/(JobPosting|Hiring)/i.test(t)) continue;
+    if (!roleTypes.includes(t)) roleTypes.push(t);
+    const title = txt(e.title) || txt(e.jobTitle);
+    if (!title || roles.some((r) => r.title === title)) continue;
+    const co = byUrn.get(e.companyUrn || e['*company'] || (e.companyDetails && e.companyDetails.company) || '') || {};
+    roles.push({ title, company: txt(e.companyName) || txt(co.name), place: txt(e.formattedLocation) || txt(e.location) });
+  }
+  const openRoles = roles.slice(0, 5).map((r) => [r.title, r.company, r.place].filter(Boolean).join(' · ').slice(0, 200));
+  const extra = { openRoles, roleTypes: roleTypes.slice(0, 10) };
   const when = (p) => { const s = (p.dateRange && p.dateRange.start) || {}; return (s.year || 0) * 100 + (s.month || 0); };
   const current = inc.filter((e) => /identity\.profile\.Position$/.test(e.$type || '') && e.dateRange && e.dateRange.start && !e.dateRange.end)
     .sort((a, b) => when(b) - when(a));
-  if (!current.length) return { kind: 'ok', why: 'no current job on the profile' };
+  if (!current.length) return { kind: 'ok', why: 'no current job on the profile', ...extra };
   const p = current[0];
   const co = byUrn.get(p.companyUrn || p['*company'] || '') || {};
   const industry = (co.industryUrns || []).map((u) => (byUrn.get(u) || {}).name).find(Boolean) || '';
@@ -605,7 +620,7 @@ async function readLeadInPage(slug, pathTemplate) {
   const size = r.start ? (r.end ? `${n(r.start)}-${n(r.end)} employees` : `${n(r.start)}+ employees`) : '';
   const url = /^https:\/\/www\.linkedin\.com\/company\/[^/?#\s]+\/?$/.test(co.url || '') ? co.url : '';
   return { kind: 'ok', title: String(p.title || ''), company: String(p.companyName || co.name || ''),
-           pageName: String(co.name || ''), url, industry, size, why: url ? '' : 'current job has no LinkedIn company page' };
+           pageName: String(co.name || ''), url, industry, size, why: url ? '' : 'current job has no LinkedIn company page', ...extra };
 }
 
 async function startFastDetails(tabId) {
@@ -701,7 +716,8 @@ async function fastReader(tabId, k) {
     formatFails = 0;
     done = { person_id: task.person_id, company: (got.company || '').slice(0, 200), title: (got.title || '').slice(0, 200),
              company_url: got.url || '', page_name: (got.pageName || '').slice(0, 200), industry: (got.industry || '').slice(0, 120),
-             size: (got.size || '').slice(0, 60), note: (got.why || '').slice(0, 300) };
+             size: (got.size || '').slice(0, 60), note: (got.why || '').slice(0, 300),
+             open_roles: (got.openRoles || []).slice(0, 5), role_types: (got.roleTypes || []).slice(0, 10) };
   }
 }
 

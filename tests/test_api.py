@@ -84,7 +84,7 @@ def test_full_flow_start_ingest_status_stop_export(client):
     assert csv_res.status_code == 200 and "text/csv" in csv_res.headers["content-type"]
     rows = list(csv.reader(io.StringIO(csv_res.content.decode("utf-8-sig"))))
     from app.export import COLUMNS
-    assert rows[0] == COLUMNS and "Business Email" not in COLUMNS and len(COLUMNS) == 14 and "Company Industry" in COLUMNS
+    assert rows[0] == COLUMNS and "Business Email" not in COLUMNS and len(COLUMNS) == 16 and "Company Industry" in COLUMNS
     assert len(rows) == 3
 
     x = client.get("/api/export.xlsx", params={"job_id": job_id})
@@ -437,3 +437,36 @@ def test_fast_details_stops_when_the_search_was_stopped(client):
 
 def test_server_time_header(client):
     assert "x-process-ms" in client.get("/api/settings").headers
+
+
+def test_open_roles_from_the_profile_data_are_saved_matched_and_filtered(client):
+    """Open roles ride along in the same /api/details/fast call (no extra LinkedIn request).
+    With skills in the search, "Open Role Matches" is Yes only when an open role names one."""
+    job = start(client, keywords=["Java", "Spring Boot"]).json()["job_id"]
+    client.post("/api/ingest", json={"job_id": job, "people": [person(1), person(2), person(3)]})
+    t1 = client.post("/api/details/fast", json={"job_id": job}).json()["task"]
+    t2 = client.post("/api/details/fast", json={"job_id": job, "done": {
+        "person_id": t1["person_id"], "company": "Acme", "title": "Recruiter",
+        "open_roles": ["Senior Java Developer · Acme · Chennai (On-site)"], "role_types": ["x.jobs.JobPosting"]}}).json()["task"]
+    t3 = client.post("/api/details/fast", json={"job_id": job, "done": {
+        "person_id": t2["person_id"], "company": "Daasho", "title": "TA",
+        "open_roles": ["Business Development Executive (BDE) · Daasho · Chennai (On-site)"]}}).json()["task"]
+    client.post("/api/details/fast", json={"job_id": job, "done": {"person_id": t3["person_id"], "company": "Globex"}})
+    leads = {p["id"]: p for p in client.get("/api/leads", params={"job_id": job}).json()["items"]}
+    assert leads[t1["person_id"]]["hiring_for"].startswith("Senior Java Developer")
+    assert [leads[t["person_id"]]["open_role_match"] for t in (t1, t2, t3)] == ["Yes", "No", "No open role"]
+    only = client.get("/api/leads", params={"job_id": job, "open_match": "1"}).json()
+    assert only["total"] == 1 and only["items"][0]["id"] == t1["person_id"]
+    rows = list(csv.reader(io.StringIO(client.get("/api/export.csv", params={"job_id": job, "open_match": "1"}).content.decode("utf-8-sig"))))
+    assert len(rows) == 2 and rows[1][-2].startswith("Senior Java Developer") and rows[1][-1] == "Yes"
+
+
+def test_old_fast_payload_without_open_roles_still_works(client):
+    """A 1.47 extension sends no open_roles: nothing breaks, the lead is simply 'No open role'."""
+    job = start(client).json()["job_id"]
+    client.post("/api/ingest", json={"job_id": job, "people": [person(1)]})
+    t = client.post("/api/details/fast", json={"job_id": job}).json()["task"]
+    r = client.post("/api/details/fast", json={"job_id": job, "done": {"person_id": t["person_id"], "company": "Acme"}})
+    assert r.status_code == 200
+    lead = client.get("/api/leads", params={"job_id": job}).json()["items"][0]
+    assert (lead["hiring_for"], lead["open_role_match"]) == ("", "No open role")

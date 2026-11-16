@@ -30,7 +30,8 @@ SOURCE_PLATFORM = "LinkedIn – People search"
 COLUMNS = ["Person Name", "Current Designation", "Headline", "Location", "Location Matches Search",
            "Person LinkedIn URL", "Hiring Status",
            "Company Name", "Company Industry", "Company Size", "Company Website",
-           "Source Platform", "Date Collected (IST)", "Last Verified Date (IST)"]
+           "Source Platform", "Date Collected (IST)", "Last Verified Date (IST)",
+           "Hiring For (Open Roles)", "Open Role Matches"]   # added last (Nov 2026): from the profile data
 
 # Fixed, readable widths (characters). Long text is cut off at the cell edge (never spills into the
 # next cell); the full text is still in the cell.
@@ -38,7 +39,8 @@ WIDTHS = {"Person Name": 24, "Current Designation": 30, "Headline": 50, "Locatio
           "Location Matches Search": 14, "Person LinkedIn URL": 42, "Hiring Status": 16,
           "Hiring For": 34, "Posted": 14, "Company Name": 26, "Hiring Company": 26,
           "Company Industry": 26, "Company Size": 18, "Company Website": 24, "Source Platform": 24,
-          "Date Collected (IST)": 18, "Last Verified Date (IST)": 18}
+          "Date Collected (IST)": 18, "Last Verified Date (IST)": 18,
+          "Hiring For (Open Roles)": 44, "Open Role Matches": 16}
 
 
 # Spreadsheet programs run text that starts with these characters as formulas.
@@ -113,7 +115,8 @@ def _values(p: dict) -> list:
     return [p.get("name"), p.get("title"), p.get("headline"), p.get("location"), location_in_search(p),
             p.get("profile_url"), p.get("status"),
             p.get("company"), p.get("company_industry"), p.get("company_size"),
-            p.get("company_website"), SOURCE_PLATFORM, p.get("first_found"), p.get("last_seen")]
+            p.get("company_website"), SOURCE_PLATFORM, p.get("first_found"), p.get("last_seen"),
+            p.get("hiring_for"), p.get("open_role_match")]
 
 
 def _safe(value) -> str:

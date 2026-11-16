@@ -39,7 +39,9 @@ COMPANY_STATUSES = ("found", "not_found")
 WEBSITE_COLUMNS = ("company_website", "website_checked")   # website_checked: when looked up
 # company_url: the exact company page from the person's profile; profile_checked: when it was read.
 DETAIL_COLUMNS = ("company_url", "profile_checked", "detail_note",
-                  "latest_posted")      # newest open role, as LinkedIn shows it ("3 months ago"); '' = unknown
+                  "latest_posted",      # newest open role, as LinkedIn shows it ("3 months ago"); '' = unknown
+                  "roles_checked",      # when hiring_for was read ('' = never: a lead from before Nov 2026)
+                  "hiring_for")         # open roles from the profile data already read ("Title · Company · Place"; ' | ' between)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS people (
@@ -636,6 +638,13 @@ class Storage:
                     return {"kind": "profile", "person_id": r["id"], "url": r["profile_url"]}
         return None
 
+    def set_hiring_for(self, job_id: str, person_id: int, roles: list[str]) -> None:
+        """Open roles ("Hiring: <job>") read from LinkedIn's profile data for this lead. Empty = none shown."""
+        text = " | ".join(" ".join(r.split())[:200] for r in roles if r and r.strip())[:600]
+        with self._tx() as c:
+            c.execute("UPDATE people SET hiring_for=?, roles_checked=? WHERE id=? AND job_id=?",
+                      (text, now_ist(), person_id, job_id))
+
     def detail_progress(self, job_id: str) -> dict:
         """Lead details progress for one run: how many of its saved people have had their current
         company looked up (done) out of all its saved people (total). Read only; for the dashboard bar."""
@@ -721,6 +730,12 @@ class Storage:
             return [dict(r) for r in c.execute("SELECT * FROM companies ORDER BY checked")]
 
     def _with_company(self, c, rows) -> list[dict]:
+        skills_by_job = {}
+        for r in c.execute("SELECT job_id, keywords FROM jobs"):
+            try:
+                skills_by_job[r["job_id"]] = [k for k in json.loads(r["keywords"] or "[]") if (k or "").strip()]
+            except (ValueError, TypeError):
+                skills_by_job[r["job_id"]] = []
         by_name, by_url = {}, {}
         for r in c.execute("SELECT company_key, industry, size, linkedin_url, status, page_name, website FROM companies"):
             by_name[r["company_key"]] = r
@@ -748,6 +763,9 @@ class Storage:
                     d["company_website"] = ""
             if ci and ci["website"]:
                 d["company_website"] = ci["website"]  # the company's own website, from its LinkedIn page
+            d["hiring_for"] = d.get("hiring_for") or ""
+            d["open_role_match"] = (open_role_match(d["hiring_for"], skills_by_job.get(d.get("job_id"), []))
+                                    if d.get("roles_checked") else "")      # never read: say nothing
             out.append(d)
         return out
 
@@ -755,6 +773,10 @@ class Storage:
         filters = filters or {}
         page = max(1, int(page))
         page_size = max(1, min(int(page_size), 500))
+        if filters.get("open_match"):             # computed per lead, so filtered here, then paged
+            items = self.all_leads(filters)
+            return {"total": len(items), "page": page, "page_size": page_size,
+                    "items": items[(page - 1) * page_size: page * page_size]}
         where, args = self._where(filters)
         with self._read() as c:
             total = c.execute(f"SELECT COUNT(*) FROM people{where}", args).fetchone()[0]
@@ -769,11 +791,29 @@ class Storage:
         with self._read() as c:
             rows = c.execute(f"SELECT * FROM people{where} ORDER BY first_found DESC, id DESC",
                              args).fetchall()
-            return self._with_company(c, rows)
+            out = self._with_company(c, rows)
+        if (filters or {}).get("open_match"):
+            out = [d for d in out if d["open_role_match"] == "Yes"]
+        return out
 
     def count_people(self) -> int:
         with self._read() as c:
             return c.execute("SELECT COUNT(*) FROM people").fetchone()[0]
+
+
+def open_role_match(hiring_for: str, skills: list[str]) -> str:
+    """Yes: the lead shows an open role and, when the search named skills ("Hiring for"), one of
+    them is in that open role's text. No: open role(s), none naming a skill. "No open role": none
+    in LinkedIn's profile data. Whole words only, so "Java" never matches "JavaScript"."""
+    if not (hiring_for or "").strip():
+        return "No open role"
+    if not skills:
+        return "Yes"
+    for k in skills:
+        k = " ".join((k or "").split())
+        if k and re.search(r"(?<![A-Za-z0-9+#.])" + re.escape(k) + r"(?![A-Za-z0-9+#])", hiring_for, re.IGNORECASE):
+            return "Yes"
+    return "No"
 
 
 def open_storage(database_url: str | None = None) -> Storage:
