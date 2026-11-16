@@ -30,8 +30,8 @@ SOURCE_PLATFORM = "LinkedIn – People search"
 COLUMNS = ["Person Name", "Current Designation", "Headline", "Location", "Location Matches Search",
            "Person LinkedIn URL", "Hiring Status",
            "Company Name", "Company Industry", "Company Size", "Company Website",
-           "Source Platform", "Date Collected (IST)", "Last Verified Date (IST)",
-           "Hiring For (Open Roles)", "Open Role Matches"]   # added last (Nov 2026): from the profile data
+           "Source Platform", "Hiring For (Open Roles)",
+           "Date Collected (IST)", "Last Verified Date (IST)"]   # dates last; "Open Role Matches" removed on request
 
 # Fixed, readable widths (characters). Long text is cut off at the cell edge (never spills into the
 # next cell); the full text is still in the cell.
@@ -115,8 +115,8 @@ def _values(p: dict) -> list:
     return [p.get("name"), p.get("title"), p.get("headline"), p.get("location"), location_in_search(p),
             p.get("profile_url"), p.get("status"),
             p.get("company"), p.get("company_industry"), p.get("company_size"),
-            p.get("company_website"), SOURCE_PLATFORM, p.get("first_found"), p.get("last_seen"),
-            p.get("hiring_for"), p.get("open_role_match")]
+            p.get("company_website"), SOURCE_PLATFORM, p.get("hiring_for"),
+            p.get("first_found"), p.get("last_seen")]
 
 
 def _safe(value) -> str:

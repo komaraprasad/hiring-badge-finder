@@ -84,7 +84,7 @@ def test_full_flow_start_ingest_status_stop_export(client):
     assert csv_res.status_code == 200 and "text/csv" in csv_res.headers["content-type"]
     rows = list(csv.reader(io.StringIO(csv_res.content.decode("utf-8-sig"))))
     from app.export import COLUMNS
-    assert rows[0] == COLUMNS and "Business Email" not in COLUMNS and len(COLUMNS) == 16 and "Company Industry" in COLUMNS
+    assert rows[0] == COLUMNS and "Business Email" not in COLUMNS and len(COLUMNS) == 15 and "Company Industry" in COLUMNS
     assert len(rows) == 3
 
     x = client.get("/api/export.xlsx", params={"job_id": job_id})
@@ -459,7 +459,9 @@ def test_open_roles_from_the_profile_data_are_saved_matched_and_filtered(client)
     only = client.get("/api/leads", params={"job_id": job, "open_match": "1"}).json()
     assert only["total"] == 1 and only["items"][0]["id"] == t1["person_id"]
     rows = list(csv.reader(io.StringIO(client.get("/api/export.csv", params={"job_id": job, "open_match": "1"}).content.decode("utf-8-sig"))))
-    assert len(rows) == 2 and rows[1][-2].startswith("Senior Java Developer") and rows[1][-1] == "Yes"
+    r = dict(zip(rows[0], rows[1]))
+    assert len(rows) == 2 and r["Hiring For (Open Roles)"].startswith("Senior Java Developer")
+    assert "Open Role Matches" not in rows[0] and rows[0][-2:] == ["Date Collected (IST)", "Last Verified Date (IST)"]
 
 
 def test_old_fast_payload_without_open_roles_still_works(client):

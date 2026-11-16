@@ -315,8 +315,8 @@ def test_csv_columns_exact_and_values(st):
     assert rows[0] == ["Person Name", "Current Designation", "Headline", "Location", "Location Matches Search",
                        "Person LinkedIn URL", "Hiring Status",
                        "Company Name", "Company Industry", "Company Size", "Company Website",
-                       "Source Platform", "Date Collected (IST)", "Last Verified Date (IST)",
-                       "Hiring For (Open Roles)", "Open Role Matches"]
+                       "Source Platform", "Hiring For (Open Roles)",
+                       "Date Collected (IST)", "Last Verified Date (IST)"]
     for gone in ("Hiring Role(s)", "Headline Has Searched Title", "Business Email", "Hiring For", "Hiring Company", "Posted"):          # removed on request
         assert gone not in rows[0]
     for gone in ("Hiring Signal Type", "Hiring Evidence", "Qualification Reason", "Email Status", "Email Source"):
@@ -429,7 +429,7 @@ def test_xlsx_is_a_formatted_table_with_links_and_dates(st):
     j = new_job(st)
     st.ingest(j, [person(1), person(2, name="=cmd")])
     ws = load_workbook(io.BytesIO(export.to_xlsx(st.all_leads()))).active
-    assert list(ws.tables) == ["HiringPeople"] and ws.tables["HiringPeople"].ref == "A1:P3"
+    assert list(ws.tables) == ["HiringPeople"] and ws.tables["HiringPeople"].ref == "A1:O3"
     assert ws.freeze_panes == "B2"
     hdr = [c.value for c in ws[1]]
     url = ws.cell(row=2, column=hdr.index("Person LinkedIn URL") + 1)
