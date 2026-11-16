@@ -636,6 +636,14 @@ class Storage:
                     return {"kind": "profile", "person_id": r["id"], "url": r["profile_url"]}
         return None
 
+    def detail_progress(self, job_id: str) -> dict:
+        """Lead details progress for one run: how many of its saved people have had their current
+        company looked up (done) out of all its saved people (total). Read only; for the dashboard bar."""
+        with self._read() as c:
+            r = c.execute("SELECT COUNT(*) AS total, COALESCE(SUM(CASE WHEN profile_checked<>'' OR company_url<>''"
+                          " THEN 1 ELSE 0 END), 0) AS done FROM people WHERE job_id=?", (job_id,)).fetchone()
+        return {"done": int(r["done"] or 0), "total": int(r["total"] or 0)}
+
     def detail_pages_today(self) -> int:
         with self._read() as c:
             r = c.execute("SELECT count FROM detail_pages_by_day WHERE day=?", (today_ist(),)).fetchone()

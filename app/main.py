@@ -187,6 +187,12 @@ def _public_job(job: dict) -> dict:
         out["summary"] = out["summary"] + " · " + ", ".join(notes)
     out["short_reason"] = short_reason(job)
     out["max_pages"] = MAX_PAGES_PER_RUN
+    out["details_on"] = COMPANY_DETAILS_ON
+    try:                                   # for the overall-completion bar only; never breaks a status
+        d = db().detail_progress(job["job_id"])
+    except Exception:
+        d = {"done": 0, "total": 0}
+    out["details_done"], out["details_total"] = d["done"], d["total"]
     return out
 
 

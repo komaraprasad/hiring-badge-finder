@@ -63,6 +63,8 @@ def test_full_flow_start_ingest_status_stop_export(client):
     st = client.get("/api/status", params={"job_id": job_id}).json()
     assert st["saved"] == 2 and st["not_hiring"] == 1 and st["other_locations"] == 1
     assert st["summary"].startswith("2 of 25 saved · read 4 people on 1 page · filtered out:")
+    # overall-completion bar: lead details read so far, out of the leads saved
+    assert (st["details_on"], st["details_done"], st["details_total"]) == (True, 0, 2)
 
     assert client.post("/api/heartbeat", json={"job_id": job_id, "message": "page 1: 4 cards"}).status_code == 200
     assert client.get("/api/status", params={"job_id": job_id}).json()["message"] == "page 1: 4 cards"

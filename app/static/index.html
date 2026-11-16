@@ -196,6 +196,11 @@
   .counters b.bump { color: var(--brand); }
   .bar { height: 4px; background: var(--well); border-radius: 4px; overflow: hidden; margin-top: 14px; }
   .bar > div { height: 100%; width: 0; background: var(--brand); transition: width .6s ease; }
+  .overall { margin-top: 14px; }
+  .overall .bar { height: 8px; margin-top: 6px; }
+  .overall-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; font-size: 13px; color: var(--muted, inherit); }
+  .overall-head b { font-variant-numeric: tabular-nums; color: var(--ink, inherit); }
+  .overall.ended .bar > div { background: var(--muted, #8a8a8a); }
 
   /* error toast, visible from every tab */
   #errorBox { position: fixed; z-index: 50; right: 24px; bottom: 24px; max-width: min(460px, calc(100vw - 32px)); cursor: pointer;
@@ -480,7 +485,10 @@
               <ol id="timeline"></ol>
             </div>
           </div>
-          <div class="bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="bar"><div id="barFill"></div></div>
+          <div class="overall" id="overall">
+            <div class="overall-head"><span id="overallText">Overall completion</span><b id="overallPct">0%</b></div>
+            <div class="bar" role="progressbar" aria-label="Overall completion: leads found and company details read" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="bar"><div id="barFill"></div></div>
+          </div>
           <div id="runBox" class="hidden">
             <div id="summary"></div>
             <div id="beat" aria-live="polite"></div>
@@ -822,11 +830,11 @@
     runStatus = j.status;
     $('runBox').classList.remove('hidden');
     const pct = Math.min(100, Math.round((j.saved / Math.max(1, j.target)) * 100));
-    $('barFill').style.width = pct + '%'; $('bar').setAttribute('aria-valuenow', String(pct));
     $('summary').textContent = j.summary;
     $('whyShort').textContent = j.short_reason || '';
     if (j.message) { $('beat').textContent = j.message; logStep(j.message); }
     trackDetails(j.message);
+    lastJob = j; renderOverall();
     if (j.error) { $('errorBox').textContent = j.error; $('errorBox').classList.remove('hidden'); }
     if (j.warning) { $('warnBox').textContent = j.warning; $('warnBox').classList.remove('hidden'); }
     const running = j.status === 'running';
@@ -1060,6 +1068,32 @@
   // search ends, for a few minutes more.
   // While that runs, the Export button says so and asks before exporting half-filled columns.
   var detailsFilling = false;   // var: showJob (above) reads it
+  var lastJob = null;           // latest status, for the overall-completion bar
+  // Overall completion: half for finding the leads, half for reading their company details.
+  // 100% only when the search has ended AND every saved lead has had its details read.
+  function renderOverall() {
+    const j = lastJob; if (!j || j.job_id !== jobId) return;
+    const running = j.status === 'running';
+    const target = Math.max(1, j.target || 0), saved = j.saved || 0;
+    const found = running ? Math.min(1, saved / target) : 1;   // an ended search has found all it will
+    const detailsOn = j.details_on !== false;
+    const total = j.details_total || 0, done = Math.min(total, j.details_done || 0);
+    const det = !detailsOn ? 1 : (total ? done / total : (running ? 0 : 1));
+    let pct = detailsOn ? Math.floor(50 * found + 50 * det) : Math.floor(100 * found);
+    const busy = running || detailsFilling;
+    const complete = !busy && j.status === 'done' && (!detailsOn || done >= total);
+    if (!complete) pct = Math.min(pct, 99);
+    if (complete) pct = 100;
+    let text;
+    if (complete) text = 'Complete ✓ · ' + saved + ' leads with company details';
+    else if (running) text = 'Finding leads ' + saved + ' / ' + (j.target || 0) + (detailsOn && total ? ' · Company details ' + done + ' / ' + total : '');
+    else if (detailsFilling) text = 'Company details ' + done + ' / ' + total;
+    else text = (j.status === 'done' ? 'Ended' : (STATE[j.status] || j.status)) + (detailsOn && total ? ' · company details ' + done + ' / ' + total : '');
+    $('overallText').textContent = 'Overall completion · ' + text;
+    $('overallPct').textContent = pct + '%';
+    $('barFill').style.width = pct + '%'; $('bar').setAttribute('aria-valuenow', String(pct));
+    $('overall').classList.toggle('ended', !busy && !complete);
+  }
   const EXPORT_LABEL = 'Export this run (Excel)';
   function trackDetails(msg) {
     const m = String(msg || '');
@@ -1073,6 +1107,7 @@
     b.title = detailsFilling ? '"Company Industry" and "Company Size" are still being read from LinkedIn. Wait for "Lead details: done".' : '';
     if (runStatus !== 'running') $('runPhase').textContent = detailsFilling ? m : $('runPhase').textContent;
     $('stopBtn').disabled = !(runStatus === 'running' || detailsFilling);
+    renderOverall();
   }
   $('runXlsx').addEventListener('click', (e) => {
     if (detailsFilling && !confirm('"Company Industry" and "Company Size" are still being filled from LinkedIn. ' +
@@ -1110,7 +1145,11 @@
   // the server every 3 s, so progress, messages and results are always current.
   let pollTick = 0;
   setInterval(async () => {
-    if (!jobId || runStatus !== 'running') return;
+    if (!jobId) return;
+    if (runStatus !== 'running') {      // company details still filling: keep the completion bar current
+      if (detailsFilling) { try { showJob(await api('/api/status?job_id=' + encodeURIComponent(jobId))); } catch (e) { /* next tick */ } }
+      return;
+    }
     try { showJob(await api('/api/status?job_id=' + encodeURIComponent(jobId))); } catch (e) { /* next tick */ }
     pollTick += 1;
     if (pollTick % 2 === 0 || runStatus !== 'running') { loadResults(); loadExplorer(); }

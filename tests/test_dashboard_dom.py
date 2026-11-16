@@ -473,3 +473,50 @@ def test_city_set_up_on_the_server_is_used_without_asking():
         assert "hidden" in pg.get_attribute("#placeSetup", "class")
     finally:
         p.close()
+
+
+def test_overall_bar_reaches_100_only_when_company_details_are_done():
+    """Half for finding leads, half for company details; 100% only after "Lead details: done"."""
+    p = Page(ext_version="1.0.0")
+    try:
+        pg = p.page
+        pg.add_init_script("window.HBF_POLL_MS = 150;")
+        pg.reload()
+        p.job = dict(JOB, target=50, saved=25, details_done=0, details_total=25, details_on=True)
+        pg.fill("#roleInput", "EM"); pg.press("#roleInput", "Enter")
+        pg.fill("#locInput", "Pune"); pg.press("#locInput", "Enter")
+        pg.click("#launchBtn")
+        pct = lambda: pg.inner_text("#overallPct")
+        pg.wait_for_function("document.getElementById('overallPct').textContent === '25%'")
+        assert "Finding leads 25 / 50" in pg.inner_text("#overallText")
+        # search finished, details still being read: not 100% even though the dial says 50/50
+        p.job = dict(p.job, status="done", end_reason="target reached", saved=50, details_done=20,
+                     details_total=50, message="Lead details: Acme: Software Development")
+        pg.wait_for_function("document.getElementById('overallPct').textContent === '70%'")
+        assert "Company details 20 / 50" in pg.inner_text("#overallText")
+        assert pg.inner_text("#dialNum") == "50 / 50"
+        p.job = dict(p.job, details_done=50, message="Lead details: done")
+        pg.wait_for_function("document.getElementById('overallPct').textContent === '100%'")
+        assert "Complete" in pg.inner_text("#overallText")
+        assert pg.get_attribute("#bar", "aria-valuenow") == "100"
+        assert pct() == "100%" and not p.errors
+    finally:
+        p.close()
+
+
+def test_overall_bar_never_shows_100_when_details_stop_early():
+    p = Page(ext_version="1.0.0")
+    try:
+        pg = p.page
+        pg.add_init_script("window.HBF_POLL_MS = 150;")
+        pg.reload()
+        p.job = dict(JOB, target=25, saved=25, status="done", end_reason="target reached", details_done=10,
+                     details_total=25, details_on=True, message="Lead details: done (limit of 60 pages per search reached)")
+        pg.fill("#roleInput", "EM"); pg.press("#roleInput", "Enter")
+        pg.fill("#locInput", "Pune"); pg.press("#locInput", "Enter")
+        pg.click("#launchBtn")
+        pg.wait_for_function("document.getElementById('overallPct').textContent === '70%'")
+        assert "ended" in pg.get_attribute("#overall", "class")
+        assert "company details 10 / 25" in pg.inner_text("#overallText")
+    finally:
+        p.close()

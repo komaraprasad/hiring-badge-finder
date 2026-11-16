@@ -696,3 +696,17 @@ def test_a_search_sending_news_is_not_closed(tmp_path):
     s.set_message(j, "page 3")                  # fresh news: still alive
     s.list_jobs()
     assert s.get_job(j)["status"] == "running"
+
+
+def test_detail_progress_counts_saved_leads_whose_company_was_looked_up(st):
+    """The dashboard's overall-completion bar: done / total lead details for one run only."""
+    j, other = new_job(st), new_job(st)
+    assert st.detail_progress(j) == {"done": 0, "total": 0}
+    st.ingest(j, [person(1), person(2), person(3)])
+    st.ingest(other, [person(9)])
+    assert st.detail_progress(j) == {"done": 0, "total": 3}
+    ids = [p["id"] for p in st.all_leads({"job_id": j})]
+    st.save_profile_company(j, ids[0], "Acme", "EM", "https://www.linkedin.com/company/acme/")
+    st.save_profile_company(j, ids[1], "", "", "")                 # profile showed no current job: still done
+    assert st.detail_progress(j) == {"done": 2, "total": 3}
+    assert st.detail_progress(other) == {"done": 0, "total": 1}
