@@ -230,8 +230,6 @@ class Storage:
                 conn.execute("ALTER TABLE jobs ADD COLUMN posted_within TEXT NOT NULL DEFAULT ''")
             if "old_roles" not in have:
                 conn.execute("ALTER TABLE jobs ADD COLUMN old_roles INTEGER NOT NULL DEFAULT 0")
-            if "skill_dropped" not in have:   # leads removed: their open role was not for the searched skill
-                conn.execute("ALTER TABLE jobs ADD COLUMN skill_dropped INTEGER NOT NULL DEFAULT 0")
             if "detail_pages" not in have:
                 conn.execute("ALTER TABLE jobs ADD COLUMN detail_pages INTEGER NOT NULL DEFAULT 0")
             if "start_page" not in have:
@@ -647,14 +645,6 @@ class Storage:
             c.execute("UPDATE people SET hiring_for=?, roles_checked=? WHERE id=? AND job_id=?",
                       (text, now_ist(), person_id, job_id))
 
-    def drop_lead(self, job_id: str, person_id: int) -> bool:
-        """Remove a lead whose open role is not for the searched skill (it is not kept anywhere)."""
-        with self._tx() as c:
-            n = c.execute("DELETE FROM people WHERE id=? AND job_id=?", (person_id, job_id)).rowcount
-            if n:
-                c.execute("UPDATE jobs SET skill_dropped=skill_dropped+1, updated=? WHERE job_id=?", (now_ist(), job_id))
-        return bool(n)
-
     def detail_progress(self, job_id: str) -> dict:
         """Lead details progress for one run: how many of its saved people have had their current
         company looked up (done) out of all its saved people (total). Read only; for the dashboard bar."""
@@ -740,13 +730,12 @@ class Storage:
             return [dict(r) for r in c.execute("SELECT * FROM companies ORDER BY checked")]
 
     def _with_company(self, c, rows) -> list[dict]:
-        skills_by_job, places_by_job = {}, {}
-        for r in c.execute("SELECT job_id, keywords, locations FROM jobs"):
+        skills_by_job = {}
+        for r in c.execute("SELECT job_id, keywords FROM jobs"):
             try:
                 skills_by_job[r["job_id"]] = [k for k in json.loads(r["keywords"] or "[]") if (k or "").strip()]
-                places_by_job[r["job_id"]] = [k for k in json.loads(r["locations"] or "[]") if (k or "").strip()]
             except (ValueError, TypeError):
-                skills_by_job[r["job_id"]], places_by_job[r["job_id"]] = [], []
+                skills_by_job[r["job_id"]] = []
         by_name, by_url = {}, {}
         for r in c.execute("SELECT company_key, industry, size, linkedin_url, status, page_name, website FROM companies"):
             by_name[r["company_key"]] = r
@@ -775,8 +764,7 @@ class Storage:
             if ci and ci["website"]:
                 d["company_website"] = ci["website"]  # the company's own website, from its LinkedIn page
             d["hiring_for"] = d.get("hiring_for") or ""
-            d["open_role_match"] = (open_role_match(d["hiring_for"], skills_by_job.get(d.get("job_id"), []),
-                                                    places_by_job.get(d.get("job_id"), []))
+            d["open_role_match"] = (open_role_match(d["hiring_for"], skills_by_job.get(d.get("job_id"), []))
                                     if d.get("roles_checked") else "")      # never read: say nothing
             out.append(d)
         return out
@@ -813,36 +801,18 @@ class Storage:
             return c.execute("SELECT COUNT(*) FROM people").fetchone()[0]
 
 
-_REMOTE_RE = re.compile(r"\bremote\b", re.IGNORECASE)
-
-
-def _skill_in(text: str, skills: list[str]) -> bool:
-    for k in skills:
-        k = " ".join((k or "").split())
-        if k and re.search(r"(?<![A-Za-z0-9+#.])" + re.escape(k) + r"(?![A-Za-z0-9+#])", text, re.IGNORECASE):
-            return True
-    return False
-
-
-def open_role_match(hiring_for: str, skills: list[str], places: list[str] | None = None) -> str:
-    """Is this lead hiring for what was searched? Like job-signal tools, each OPEN ROLE is checked,
-    not the person's profile: "Yes" when one open role's TITLE names a searched skill (whole words:
-    "Java" is not "JavaScript") and, when that role shows a place, the place is a searched one (or
-    remote). Without skills, any open role in a searched place is "Yes". "No": open role(s), none
-    fitting. "No open role": the profile page showed none.
-    hiring_for: "Title · Company · Place" per role, " | " between roles."""
+def open_role_match(hiring_for: str, skills: list[str]) -> str:
+    """Yes: the lead shows an open role and, when the search named skills ("Hiring for"), one of
+    them is in that open role's text. No: open role(s), none naming a skill. "No open role": none
+    in LinkedIn's profile data. Whole words only, so "Java" never matches "JavaScript"."""
     if not (hiring_for or "").strip():
         return "No open role"
-    from .urlbuilder import location_matches
-    for role in hiring_for.split(" | "):
-        parts = [p.strip() for p in role.split(" · ")]
-        title = parts[0] if parts else ""
-        place = parts[2] if len(parts) >= 3 else ""
-        if skills and not _skill_in(title, skills):
-            continue
-        if place and places and not (_REMOTE_RE.search(place) or location_matches(place, places)):
-            continue
+    if not skills:
         return "Yes"
+    for k in skills:
+        k = " ".join((k or "").split())
+        if k and re.search(r"(?<![A-Za-z0-9+#.])" + re.escape(k) + r"(?![A-Za-z0-9+#])", hiring_for, re.IGNORECASE):
+            return "Yes"
     return "No"
 
 

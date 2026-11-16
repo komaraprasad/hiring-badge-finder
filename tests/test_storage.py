@@ -721,13 +721,6 @@ def test_open_role_match_rules():
     assert open_role_match("JavaScript Engineer · Acme", ["Java"]) == "No"              # whole words only
     assert open_role_match("Backend (Spring Boot) Lead", ["Java", "Spring Boot"]) == "Yes"
     assert open_role_match("C++ Developer", ["C"]) == "No"
-    assert open_role_match("Recruiter · Java Labs · Chennai", ["Java"]) == "No"            # skill must be in the TITLE
-    assert open_role_match("Senior Oracle Fusion SCM & 5 others · HID | Java Lead · HID · Chennai", ["Java"]) == "Yes"
-    places = ["Chennai, Tamil Nadu, India"]
-    assert open_role_match("Java Developer · X · Chennai (On-site)", ["Java"], places) == "Yes"
-    assert open_role_match("Java Developer · X · Dallas, Texas", ["Java"], places) == "No"   # role in another city
-    assert open_role_match("Java Developer · X · Remote", ["Java"], places) == "Yes"
-    assert open_role_match("Java Developer · X", ["Java"], places) == "Yes"                   # place not shown: not judged
 
 
 def test_leads_from_before_open_roles_show_nothing(st):

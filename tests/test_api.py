@@ -439,51 +439,29 @@ def test_server_time_header(client):
     assert "x-process-ms" in client.get("/api/settings").headers
 
 
-def test_skill_search_keeps_only_people_whose_open_role_is_for_the_skill(client):
-    """Skill searches keep ONLY leads whose open role names the skill (in a searched place).
-    Others are removed after their role is read: no extra LinkedIn request, the search is unchanged."""
+def test_open_roles_from_the_profile_data_are_saved_matched_and_filtered(client):
+    """Open roles ride along in the same /api/details/fast call (no extra LinkedIn request).
+    With skills in the search, "Open Role Matches" is Yes only when an open role names one."""
     job = start(client, keywords=["Java", "Spring Boot"]).json()["job_id"]
-    client.post("/api/ingest", json={"job_id": job, "people": [person(n) for n in range(1, 6)]})
-    seen = []
-    orig = main.bus.publish
-    main.bus.publish = lambda kind, data: (seen.append(data.get("message", "")), orig(kind, data))
-    roles = {
-        0: (["Senior Java Developer · Acme · Bengaluru, Karnataka, India"], "found"),        # kept
-        1: (["Rebar Detailer · DVM Engineering Services · Bengaluru"], "found"),              # removed: not Java
-        2: ([], "none"),                                                                      # removed: no open role
-        3: (["Java Developer · Predactica · Dallas, Texas, United States"], "found"),         # removed: other city
-        4: ([], "unknown"),                                                                   # kept: could not read
-    }
-    try:
-        t = client.post("/api/details/fast", json={"job_id": job}).json()["task"]
-        ids = []
-        for k in range(5):
-            ids.append(t["person_id"])
-            rs, st = roles[k]
-            t = client.post("/api/details/fast", json={"job_id": job, "done": {
-                "person_id": t["person_id"], "company": "Co", "open_roles": rs, "roles_status": st}}).json()["task"] or t
-    finally:
-        main.bus.publish = orig
-    leads = {p["id"]: p for p in client.get("/api/leads", params={"job_id": job}).json()["items"]}
-    assert set(leads) == {ids[0], ids[4]}
-    assert leads[ids[0]]["open_role_match"] == "Yes" and leads[ids[4]]["open_role_match"] == ""
-    st = client.get("/api/status", params={"job_id": job}).json()
-    assert st["skill_dropped"] == 3 and "3 not hiring for the skill (removed)" in st["summary"]
-    assert st["saved"] == 5                                   # the search's own count is unchanged
-    assert any("not kept (open role not for Java, Spring Boot)" in m for m in seen)
-    only = client.get("/api/leads", params={"job_id": job, "open_match": "1"}).json()
-    assert only["total"] == 1 and only["items"][0]["id"] == ids[0]
-
-
-def test_search_without_skills_keeps_everyone(client):
-    job = start(client).json()["job_id"]
-    client.post("/api/ingest", json={"job_id": job, "people": [person(1), person(2)]})
-    t = client.post("/api/details/fast", json={"job_id": job}).json()["task"]
+    client.post("/api/ingest", json={"job_id": job, "people": [person(1), person(2), person(3)]})
+    t1 = client.post("/api/details/fast", json={"job_id": job}).json()["task"]
     t2 = client.post("/api/details/fast", json={"job_id": job, "done": {
-        "person_id": t["person_id"], "open_roles": ["Rebar Detailer · DVM"], "roles_status": "found"}}).json()["task"]
-    client.post("/api/details/fast", json={"job_id": job, "done": {"person_id": t2["person_id"], "roles_status": "none"}})
-    leads = client.get("/api/leads", params={"job_id": job}).json()["items"]
-    assert len(leads) == 2 and client.get("/api/status", params={"job_id": job}).json()["skill_dropped"] == 0
+        "person_id": t1["person_id"], "company": "Acme", "title": "Recruiter",
+        "open_roles": ["Senior Java Developer · Acme · Chennai (On-site)"], "role_types": ["x.jobs.JobPosting"]}}).json()["task"]
+    t3 = client.post("/api/details/fast", json={"job_id": job, "done": {
+        "person_id": t2["person_id"], "company": "Daasho", "title": "TA",
+        "open_roles": ["Business Development Executive (BDE) · Daasho · Chennai (On-site)"]}}).json()["task"]
+    client.post("/api/details/fast", json={"job_id": job, "done": {"person_id": t3["person_id"], "company": "Globex",
+                                                                     "roles_status": "none"}})
+    leads = {p["id"]: p for p in client.get("/api/leads", params={"job_id": job}).json()["items"]}
+    assert leads[t1["person_id"]]["hiring_for"].startswith("Senior Java Developer")
+    assert [leads[t["person_id"]]["open_role_match"] for t in (t1, t2, t3)] == ["Yes", "No", "No open role"]
+    only = client.get("/api/leads", params={"job_id": job, "open_match": "1"}).json()
+    assert only["total"] == 1 and only["items"][0]["id"] == t1["person_id"]
+    rows = list(csv.reader(io.StringIO(client.get("/api/export.csv", params={"job_id": job, "open_match": "1"}).content.decode("utf-8-sig"))))
+    r = dict(zip(rows[0], rows[1]))
+    assert len(rows) == 2 and r["Hiring For (Open Roles)"].startswith("Senior Java Developer")
+    assert "Open Role Matches" not in rows[0] and rows[0][-2:] == ["Date Collected (IST)", "Last Verified Date (IST)"]
 
 
 def test_old_fast_payload_without_open_roles_still_works(client):
