@@ -144,6 +144,17 @@ def wrong_city_warning(locations_read: list[str], places: list[str]) -> str:
             "Check Settings -> Locations set up on LinkedIn.")
 
 
+def clearly_elsewhere(person_location: str, places: list[str]) -> bool:
+    """True only when the shown location names somewhere else ("Pune/Pimpri-Chinchwad Area" for a
+    Hyderabad search). Empty, a wanted place, or only a wider region of it ("India",
+    "Telangana, India") is not elsewhere: LinkedIn already filtered by place, so those are kept."""
+    if not (person_location or "").strip() or location_matches(person_location, places):
+        return False
+    wider = {_norm(part) for p in places for part in (p or "").split(",") if _norm(part)}
+    parts = [_norm(x) for x in person_location.split(",") if _norm(x)]
+    return not (parts and all(x in wider for x in parts))
+
+
 def location_matches(person_location: str, places: list[str]) -> bool:
     """True when the person's displayed location contains any wanted place.
 

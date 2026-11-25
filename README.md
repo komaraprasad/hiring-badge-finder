@@ -12,12 +12,12 @@ location, and exports them to CSV or Excel.
 | **Location IDs** (geoUrn) | Built in: **Bengaluru only** (the one ID captured from a real LinkedIn address). Every other place is set up automatically on its first search: LinkedIn opens, the extension chooses the city in LinkedIn's Locations filter, and the search starts by itself (see "Locations: built-in table and one-time set-up"). No place is ever widened to the whole country. |
 | **"Actively hiring" filter** | Dashboard option, **on by default**. Adds `activelyHiringForJobTitles=["-100"]`. LinkedIn labels it Premium: **unverified on free accounts**. If LinkedIn drops it, the run shows a warning and carries on without it. |
 | `app/main.py` (FastAPI) | Run and tested (`tests/test_api.py`). |
-| Postgres | Not built. The storage class is ready to be swapped through `DATABASE_URL`. |
+| Postgres | Built (`app/pgstorage.py`), chosen when `DATABASE_URL` starts with `postgres://` (used by the Render deployment with a Neon database). The full test suite runs against it when `HBF_TEST_PG` is set. |
 
 **"100% accuracy" and "0 latency" are not possible, and the tool does not pretend otherwise.**
 Every field is exactly what LinkedIn displays on the results page (nothing is invented; missing fields stay
-empty), but LinkedIn decides what it shows. The 4 to 8 second wait between pages is a safety rule
-that protects the account, so a search of 25 people takes about a minute, not zero seconds.
+empty), but LinkedIn decides what it shows. The random 1 to 2.5 second wait between pages is a safety rule
+that protects the account, so a search of 100 people takes about 3 minutes (search plus lead details), not zero seconds.
 
 ## What it does
 
@@ -32,7 +32,7 @@ The server never talks to LinkedIn. It stores no LinkedIn cookies and does no lo
 
 ## Version
 
-Extension **1.47.0** (`extension/manifest.json`). The dashboard refuses to launch with an older extension and tells you
+Extension **1.50.0** (`extension/manifest.json`). The dashboard refuses to launch with an older extension and tells you
 to click **Reload** in `edge://extensions`.
 
 ## Install (Windows 11 + Edge)
@@ -64,14 +64,26 @@ account.** Install the extension in that profile only (steps in `LIVE_TEST.md`, 
    so far, with filters (several roles and places at once), **Export filtered** and **Export all**. The CSV is still
    available at `/api/export.csv`.
 
-CSV and Excel columns, in this order (14): Person Name, Current Designation, Headline, Location, Location Matches Search, Person LinkedIn URL,
+CSV and Excel columns, in this order (15): Person Name, Current Designation, Headline, Location, Location Matches Search, Person LinkedIn URL,
 Hiring Status, Company Name, Company Industry, Company Size, Company Website, Source Platform,
-Date Collected (IST), Last Verified Date (IST).
+Hiring For (Open Roles), Date Collected (IST), Last Verified Date (IST).
+
+**Hiring For (Open Roles)** comes from the same LinkedIn profile data as the company (see below): up to 5 of
+the person's open roles as "Title · Company · Place". A role that shows its age and is older than 31 days is
+left out; a role with no age shown is kept. Empty = none shown, or not read.
 The Excel file is a formatted table (filters, clickable links, real dates); long text stays inside its own cell.
 
-**Company Industry and Company Size (ON).** They come from the company's own LinkedIn About page, read in a
-second hidden tab of the same group WHILE the search runs. For each new lead it finds where they work, then reads
-that company's page:
+**Company Industry and Company Size (ON).** Read WHILE the search runs, in a hidden helper tab of the same group.
+
+**Main way (fast details, `fastDetails` in `extension/config.js`):** the helper tab opens a plain
+linkedin.com address and, from there, requests each lead's **profile data from LinkedIn's internal profile
+API** (`/voyager/api/identity/dash/profiles`, the same data LinkedIn's own profile page loads), with your
+signed-in session. That request gives the current company, its exact LinkedIn link, industry and size. Open
+roles come from a second request: the person's own profile page (`/in/<x>/`), fetched in the background and
+read, never shown. 2 readers at once, each with a random 1-2.5 s pause between its leads. **So every saved
+lead's profile is fetched from LinkedIn** (no visible tab shows it).
+
+**Fallback (only when that data cannot be read):** visible pages in hidden tabs, as below.
 
 1. Company named on the card (headline "X at Y" or the card's "Current: X at Y" line): LinkedIn company search for
    the name, then the About page of the ONE result with exactly that name (ignoring case, punctuation, Pvt/Ltd/Inc).
@@ -81,8 +93,8 @@ that company's page:
    no current job leaves the cells empty.
 
 Every company and every profile is read once and remembered. Cost: one LinkedIn page per profile / company search /
-About page, each after a random 4-8 s pause, with their own limits: 60 pages per search and 200 per day (separate
-from the 30 search pages per run). It stops at once on a limit, sign-in or security page. Expect about 3-5 extra
+About page / profile data request, each after a random 1-2.5 s pause, with their own limits: per search at least
+60 (2 per requested lead + 10) and 600 per day (separate from the 30 search pages per run). It stops at once on a limit, sign-in or security page. Expect about 3-5 extra
 minutes for 25 new leads; the run log shows each step, and leads appear before this starts. The profile and company
 page markup was written from LinkedIn's visible labels; it was NOT captured from a real page yet.
 
@@ -163,8 +175,8 @@ Remove the place there and set it up again.
 
 On by default. The tool remembers, for each identical search (same titles, locations, skills and Actively-hiring
 setting, in any order or case), the next page to read. Running it again opens LinkedIn directly at that page
-(`&page=N`) instead of re-reading pages you already collected, so it takes seconds per *new* page. The 4 to 8 second
-safety wait between pages is unchanged.
+(`&page=N`) instead of re-reading pages you already collected, so it takes seconds per *new* page. The random 1 to
+2.5 second safety wait between pages is unchanged.
 
 - If a run stopped part-way through a page (target or daily limit), that page is read again next time so nobody
   is skipped (already-saved people are skipped as usual).
@@ -192,16 +204,17 @@ safety wait between pages is unchanged.
 
 ## Known limits
 
-- **Company / Industry / Size / Website** (1.42.0): each new lead's own Experience page gives the exact
-  company link, then that company's About page gives its name, industry, size and website. Read by 4 hidden
-  tabs in parallel WHILE the search runs (each tab: random 4-8 s pause per page; per run at most 2 pages per
-  requested lead + 10, per day 600). A company read once by link is reused at once, with no page. About
-  60-75 s for 25 new companies; more parallel tabs = more page loads a minute = higher LinkedIn limit risk. That page markup was written from LinkedIn's visible labels and was only partly
-  confirmed on real pages: when it is drawn differently the cells stay empty and the run log says why.
+- **Company / Industry / Size / Website**: mainly from each lead's profile data (LinkedIn's internal profile
+  API, 2 readers, random 1-2.5 s pause each; see "Company Industry and Company Size" above). Fallback: the
+  lead's Experience page, then the company's About page, in 2 hidden tabs. Per run at most 2 pages per requested
+  lead + 10, per day 600. A company read once by link is reused at once, with no page. More readers or shorter
+  pauses = more LinkedIn requests a minute = higher LinkedIn limit risk. The fallback page markup was written
+  from LinkedIn's visible labels and was only partly confirmed on real pages: when it is drawn differently the
+  cells stay empty and the run log says why.
 - **Company Website** is a lookup by company NAME (public DNS, never LinkedIn): it can be a different
   company with the same name. Treat it as a hint.
-- **Removed in 1.40.0:** Business Email, Hiring For, Hiring Company, Posted, the "Open roles" pop-up reading
-  and the background open-role date fetching. No code is left for them.
+- **Removed in 1.40.0:** Business Email, Hiring Company, Posted, the "Open roles" pop-up reading and the
+  background open-role date fetching. (**Hiring For** came back in 1.49.0, read from the profile data.)
 
 ## Where each field comes from (accuracy)
 
@@ -218,8 +231,14 @@ safety wait between pages is unchanged.
 
 ## Account-safety rules (built in)
 
-- Only search-result pages are read. Profile pages are never opened.
-- A random 4 to 8 second wait between result pages.
+- What is read from LinkedIn: people-search result pages, and for **each saved lead** their profile data
+  (LinkedIn's internal profile API, for the company) and their profile page HTML (fetched in the background,
+  for open roles). Only if that data cannot be read: the lead's Experience
+  page and the company's About page. Location set-up opens LinkedIn's Locations filter once per new place.
+- A random 1 to 2.5 second wait between result pages, and between each lead-details reader's requests
+  (2 readers run at the same time as the search). Set in `extension/config.js` (`pacing`, `fastDetails`).
+- Limits: 30 result pages per search, 300 people per day per browser; lead details at least 60 per search
+  (2 per requested lead + 10) and 600 per day.
 - The run stops at once if LinkedIn shows a limit, "unusual activity", sign-in or security-check page. The tab is left
   open (but not brought to the front) so you can read LinkedIn's message. Do not keep retrying.
 - LinkedIn's terms of use restrict automated collection. Even at low volume LinkedIn may restrict an account.

@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="hbf-dashboard" content="1"><!-- the extension takes orders only from a page with this mark -->
 <title>Hiring Badge Finder</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
@@ -776,7 +777,8 @@
   const link = (p, body) => '<a href="' + esc(p.profile_url) + '" target="_blank" rel="noopener noreferrer">' + body + '</a>';
   // Open roles read from the person's LinkedIn profile data (blank for leads from before this was read)
   const hiringFor = (p) => !p.hiring_for ? '' : '<div class="hfor"><b>Hiring for:</b> ' + esc(p.hiring_for) +
-    (p.open_role_match === 'Yes' ? ' <span class="hmatch">✓ match</span>' : (p.open_role_match === 'No' ? ' <span class="hnomatch">no skill match</span>' : '')) + '</div>';
+    // "✓ match" means a skill the search asked for is in the open role; with no skills asked it says nothing
+    (p.open_role_match === 'Yes' && p.skills_asked ? ' <span class="hmatch">✓ match</span>' : (p.open_role_match === 'No' ? ' <span class="hnomatch">no skill match</span>' : '')) + '</div>';
   // live feed: one card per person
   const cardHtml = (p, fresh) => '<article class="lead' + (fresh ? ' fresh' : '') + '">' + avatar(p) +
     '<div><div class="lead-top">' + link(p, esc(p.name || '(no name)')) + chip(p) + '</div>' +
@@ -840,7 +842,10 @@
     const pct = Math.min(100, Math.round((j.saved / Math.max(1, j.target)) * 100));
     $('summary').textContent = j.summary;
     $('whyShort').textContent = j.short_reason || '';
-    if (j.message) { $('beat').textContent = j.message; logStep(j.message); }
+    // Log the stored message only when it is new: the 3 s poll returns the same one again and again
+    // ("page 12: saved 100/100" repeated after the run had finished).
+    if (j.message) { $('beat').textContent = j.message; if (j.message !== lastPolledMsg) logStep(j.message); }
+    lastPolledMsg = j.message || '';
     trackDetails(j.message);
     lastJob = j; renderOverall();
     if (j.error) { $('errorBox').textContent = j.error; $('errorBox').classList.remove('hidden'); }
@@ -1076,6 +1081,7 @@
   // search ends, for a few minutes more.
   // While that runs, the Export button says so and asks before exporting half-filled columns.
   var detailsFilling = false;   // var: showJob (above) reads it
+  var lastPolledMsg = '';       // var: showJob (above) reads it
   var lastJob = null;           // latest status, for the overall-completion bar
   // Details just finished: ask for the status again (now and shortly after), so the bar shows the
   // final count instead of the one from the last poll, which can be a lead or two behind.
@@ -1083,6 +1089,7 @@
     const id = jobId; if (!id) return;
     const once = () => { if (jobId === id) api('/api/status?job_id=' + encodeURIComponent(id)).then(showJob).catch(() => {}); };
     once(); setTimeout(once, 2500);
+    setTimeout(() => { if (jobId === id) loadResults(); }, 2500);   // final cards with every detail filled
   }
   // Overall completion: half for finding the leads, half for reading their company details.
   // 100% only when the search has ended AND every saved lead has had its details read.
@@ -1164,7 +1171,11 @@
   setInterval(async () => {
     if (!jobId) return;
     if (runStatus !== 'running') {      // company details still filling: keep the completion bar current
-      if (detailsFilling) { try { showJob(await api('/api/status?job_id=' + encodeURIComponent(jobId))); } catch (e) { /* next tick */ } }
+      if (detailsFilling) {
+        try { showJob(await api('/api/status?job_id=' + encodeURIComponent(jobId))); } catch (e) { /* next tick */ }
+        pollTick += 1;
+        if (pollTick % 2 === 0) loadResults();   // cards pick up company / "Hiring for" as details arrive
+      }
       return;
     }
     try { showJob(await api('/api/status?job_id=' + encodeURIComponent(jobId))); } catch (e) { /* next tick */ }

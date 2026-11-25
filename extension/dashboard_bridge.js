@@ -8,11 +8,15 @@
   root.dataset.hbfExtVersion = chrome.runtime.getManifest().version;
 
   const TYPES = ['open', 'stop', 'teach', 'geo-list', 'geo-forget', 'geo-check', 'resolve'];
+  // Only the Hiring Badge Finder dashboard may give orders. This script runs on every localhost page,
+  // so another local app or dev server must not be able to start LinkedIn searches through it.
+  const isDashboard = () => !!document.querySelector('meta[name="hbf-dashboard"]');
   window.addEventListener('message', (event) => {
     if (event.source !== window) return;
     const d = event.data;
     if (!d || d.source !== 'hbf-dashboard') return;
     if (!TYPES.includes(d.type)) return;
+    if (!isDashboard()) return;
 
     const answer = (ok, error, extra) => window.postMessage(Object.assign({
       source: 'hbf-extension', type: d.type + '-result', jobId: d.jobId, ok, error: error || '',

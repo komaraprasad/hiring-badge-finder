@@ -354,7 +354,7 @@ def filter_bar(cfg: dict) -> str:
 
 GIF = bytes.fromhex("47494638396101000100800000ffffff00000021f90401000000002c00000000010001000002024401003b")
 
-DASHBOARD = """<!doctype html><title>stand-in dashboard</title><body>
+DASHBOARD = """<!doctype html><meta name="hbf-dashboard" content="1"><title>stand-in dashboard</title><body>
 <script>
 window.__events = [];
 window.addEventListener('message', (e) => { if (e.data && e.data.source === 'hbf-extension') window.__events.push(e.data); });

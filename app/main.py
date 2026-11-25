@@ -13,6 +13,7 @@ import re
 import threading
 import time
 import zipfile
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query
@@ -24,8 +25,8 @@ from . import export, website
 from .detection import looks_like_job_title
 from .data import LOCATIONS, SKILLS, TITLE_PRESETS, TITLES
 from .events import EventBus
-from .storage import (MAX_DETAIL_PAGES_PER_DAY, MAX_DETAIL_PAGES_PER_RUN, MAX_PAGES_PER_RUN, Storage,
-                      open_storage)
+from .storage import (MAX_DETAIL_PAGES_PER_DAY, MAX_DETAIL_PAGES_PER_RUN, MAX_PAGES_PER_RUN,
+                      POSTED_WITHIN_DAYS, Storage, open_storage)
 from .summary import short_reason, summary_line
 from .urlbuilder import (MAX_KEYWORDS, MAX_LOCATIONS, MAX_ROLES, build_url, clean_list,
                          wrong_city_warning)
@@ -43,7 +44,14 @@ def public_url() -> str:
     return url if re.fullmatch(r"https://[\w.-]+(:\d+)?", url) else ""
 
 
-app = FastAPI(title="Hiring Badge Finder", version="1.0.0")
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    _warn_without_database()
+    _start_website_worker()
+    yield
+
+
+app = FastAPI(title="Hiring Badge Finder", version="1.0.0", lifespan=_lifespan)
 # Only this computer and this deployment's OWN address are trusted, never a whole hosting domain
 # (any stranger can put a page on *.onrender.com).
 app.add_middleware(
@@ -75,28 +83,33 @@ def _website_worker() -> None:
     """Fills Company Website for saved people (see app/website.py). Never contacts LinkedIn.
     One lookup per company name (cached), whatever the person's name looks like."""
     cache: dict = {}
+    last_error = ""            # each new problem is printed once in the server window, not every round
     while True:
         todo: list = []
+        error = ""
         try:
             todo = db().people_without_website_check(20)
             for p in todo:
                 ok = p["company"] and not looks_like_job_title(p["company"])
                 db().set_website(p["id"], website.find_domain(p["company"], cache=cache) if ok else "")
-        except OSError:
-            todo = []          # offline or DNS service unreachable: leave them for the next round
-        except Exception:      # noqa: BLE001 - the worker must never stop the server
-            todo = []
+        except OSError as e:   # offline or DNS service unreachable: leave them for the next round
+            todo, error = [], f"Company Website lookup paused (network): {e}"
+        except Exception as e:  # noqa: BLE001 - the worker must never stop the server
+            todo, error = [], f"Company Website lookup error: {type(e).__name__}: {e}"
+        if error and error != last_error:
+            print("WARNING: " + error, flush=True)
+        elif not error and last_error:
+            print("Company Website lookup working again.", flush=True)
+        last_error = error
         time.sleep(1 if todo else 15)
 
 
-@app.on_event("startup")
 def _warn_without_database() -> None:
     if os.environ.get("RENDER") and not os.environ.get("DATABASE_URL"):
         print("WARNING: DATABASE_URL is not set. Leads are kept in a local file that Render deletes on every "
               "restart. Set DATABASE_URL to your Neon connection string (see DEPLOY.md).", flush=True)
 
 
-@app.on_event("startup")
 def _start_website_worker() -> None:
     if os.environ.get("HBF_WEBSITE_LOOKUP", "1") == "1":
         threading.Thread(target=_website_worker, name="website-worker", daemon=True).start()
@@ -176,6 +189,18 @@ def _job_or_404(job_id: str) -> dict:
 WARNINGS: dict[str, str] = {}
 # Short notes added to a run's summary line (e.g. "filter not applied"), by job id; in memory.
 NOTES: dict[str, list[str]] = {}
+
+
+def _prune_run_notes() -> None:
+    """Keep the in-memory notes only for recent runs (the ones the dashboard lists), so they do not
+    grow with every run while the server stays up."""
+    try:
+        keep = {j["job_id"] for j in db().list_jobs(100)}
+    except Exception:  # noqa: BLE001 - pruning must never block a search
+        return
+    for store in (WARNINGS, NOTES, _ROLE_STATS):
+        for job_id in [k for k in store if k not in keep]:
+            store.pop(job_id, None)
 
 
 def _public_job(job: dict) -> dict:
@@ -280,6 +305,7 @@ def search_start(body: StartBody):
                                  search_key=key, start_page=page, posted_within=POSTED_WITHIN)
     except RuntimeError as e:
         raise HTTPException(429, str(e))
+    _prune_run_notes()
     if page > 1:
         db().set_message(job_id, f"Continuing from page {page} (where the last same search stopped)")
     fallback_url = build_url(roles, keywords, None, places, ah, page)   # place names in keywords
@@ -433,9 +459,9 @@ def _clean_website(text: str) -> str:
     return "" if host.endswith(("linkedin.com", "lnkd.in")) else host
 
 
-# Company Industry / Size (the second phase after a search) is OFF on request (Nov 2026): the
-# server hands out no company task.
-COMPANY_DETAILS_ON = True   # back ON (Nov 2026): Industry / Size in a parallel second tab
+# Company Industry / Size: ON (Nov 2026), read in parallel hidden tabs while the search runs.
+# Set to False to make the server hand out no company task.
+COMPANY_DETAILS_ON = True
 
 
 @app.get("/api/details/next")
@@ -445,18 +471,11 @@ def details_next(job_id: str = Query(...)):
     _job_or_404(job_id)
     if not COMPANY_DETAILS_ON:
         return {"task": None}
-    with _CLAIMS_LOCK:
-        now = time.time()
-        claims = {pid: t for pid, t in _CLAIMS.setdefault(job_id, {}).items() if now - t < 180}
-        task = db().next_detail_task(job_id, exclude=set(claims))
-        if task:
-            claims[task["person_id"]] = now
-        _CLAIMS[job_id] = claims
-    return {"task": task}
+    return {"task": _claim_next(job_id)}
 
 
-_CLAIMS: dict = {}            # job_id -> {person_id: claimed at}
-_ABOUT: dict = {}             # job_id -> company pages a tab is reading now (read once per run)
+# Claims are kept in the database (see Storage.active_claims); this lock only makes "find the next
+# free lead + claim it" one step for the tabs asking at the same moment.
 _CLAIMS_LOCK = threading.Lock()
 
 
@@ -464,7 +483,6 @@ _CLAIMS_LOCK = threading.Lock()
 def details_page(body: DetailPageBody):
     """Asked before EVERY LinkedIn page loaded for company details: counts it, or refuses past the
     limits (per run and per day, separate from the 30 search pages)."""
-    _job_or_404(body.job_id)
     job = _job_or_404(body.job_id)
     per_run = max(MAX_DETAIL_PAGES_PER_RUN, 2 * int(job.get("target") or 0) + 10)
     ok = db().count_detail_page(body.job_id, per_run, MAX_DETAIL_PAGES_PER_DAY)
@@ -484,13 +502,8 @@ def details_profile(body: ProfileCompanyBody):
     r = db().save_profile_company(body.job_id, body.person_id, company, title, url, " ".join(body.note.split()))
     if not r["ok"]:
         raise HTTPException(404, "Unknown person for this search.")
-    if r.get("about"):
-        with _CLAIMS_LOCK:                     # two tabs, same company: only one reads its page
-            busy = _ABOUT.setdefault(body.job_id, set())
-            if r["about"] in busy:
-                r["about"] = ""
-            else:
-                busy.add(r["about"])
+    if r.get("about") and not db().claim_about(body.job_id, r["about"]):
+        r["about"] = ""                        # two tabs, same company: only one reads its page
     return r
 
 
@@ -512,6 +525,16 @@ class FastDone(BaseModel):
 class FastBody(BaseModel):
     job_id: str
     done: FastDone | None = None          # the lead this reader just finished (None on its first call)
+
+
+_AGE_RE = re.compile(r"·\s*([\d,]+)\s+(hour|day|week|month|year)s?\s+ago\s*$", re.IGNORECASE)
+_AGE_DAYS = {"hour": 0, "day": 1, "week": 7, "month": 30, "year": 365}
+
+
+def _role_age_days(role: str) -> int | None:
+    """'Analyst · Acme · Hyderabad · 2,029 days ago' -> 2029. No age shown: None (kept, never guessed)."""
+    m = _AGE_RE.search(role or "")
+    return int(m.group(1).replace(",", "")) * _AGE_DAYS[m.group(2).lower()] if m else None
 
 
 _ROLE_STATS: dict[str, dict] = {}    # job_id -> {"read", "found", "said"}: one run-log line about open roles
@@ -540,13 +563,15 @@ def _note_open_roles(job_id: str, found: bool, status: str, hint: str) -> None:
 
 def _claim_next(job_id: str) -> dict | None:
     with _CLAIMS_LOCK:
-        now = time.time()
-        claims = {pid: t for pid, t in _CLAIMS.setdefault(job_id, {}).items() if now - t < 180}
-        task = db().next_detail_task(job_id, exclude=set(claims))
+        task = db().next_detail_task(job_id, exclude=db().active_claims(job_id))
         if task:
-            claims[task["person_id"]] = now
-        _CLAIMS[job_id] = claims
+            db().add_claim(job_id, task["person_id"])
     return task
+
+
+def _release_claim(job_id: str, person_id) -> None:
+    """A claimed lead that will not be read now (page refused): free it at once, not after 3 min."""
+    db().release_claim(job_id, person_id)
 
 
 @app.post("/api/details/fast")
@@ -567,6 +592,9 @@ def details_fast(body: FastBody):
         db().save_profile_company(body.job_id, d.person_id, company, " ".join(d.title.split()), url,
                                   " ".join(d.note.split()))
         roles = [" ".join(r.split())[:200] for r in d.open_roles if r and r.strip()][:5]
+        limit = POSTED_WITHIN_DAYS.get(job.get("posted_within") or "")
+        if limit is not None:                      # same rule as the search: drop roles KNOWN to be older
+            roles = [r for r in roles if (_role_age_days(r) or 0) <= limit]
         if roles or d.roles_status == "none":      # only a real read is saved; unknown stays blank, never "No open role"
             db().set_hiring_for(body.job_id, d.person_id, roles)
         bus.publish("heartbeat", {"job_id": body.job_id, "message": "Lead details: " + (
@@ -582,6 +610,7 @@ def details_fast(body: FastBody):
     if task:
         per_run = max(MAX_DETAIL_PAGES_PER_RUN, 2 * int(job.get("target") or 0) + 10)
         if not db().count_detail_page(body.job_id, per_run, MAX_DETAIL_PAGES_PER_DAY):
+            _release_claim(body.job_id, task["person_id"])
             return {"status": job["status"], "task": None,
                     "stop": f"limit of {per_run} pages per search / {MAX_DETAIL_PAGES_PER_DAY} per day reached"}
     return {"status": job["status"], "task": task, "stop": ""}

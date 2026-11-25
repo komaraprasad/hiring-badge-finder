@@ -27,6 +27,44 @@ def new_job(st, target=25, places=None, locs=("Bengaluru",)):
     return st.create_job(["Engineering Manager"], list(locs), [], target, text_filter_places=places or [])
 
 
+# --------------------------------------------------------- details claims
+def test_detail_claims_are_stored_and_survive_a_restart(st, tmp_path):
+    j = new_job(st)
+    st.ingest(j, [person(1), person(2)])
+    first = st.next_detail_task(j, exclude=st.active_claims(j))
+    st.add_claim(j, first["person_id"])
+    again = Storage(str(tmp_path / "t.db"))          # the server restarted: claims are still there
+    assert again.active_claims(j) == {first["person_id"]}
+    second = again.next_detail_task(j, exclude=again.active_claims(j))
+    assert second["person_id"] != first["person_id"]
+
+
+def test_released_claim_is_free_at_once(st):
+    j = new_job(st)
+    st.ingest(j, [person(1)])
+    pid = st.next_detail_task(j)["person_id"]
+    st.add_claim(j, pid)
+    st.release_claim(j, pid)
+    assert st.active_claims(j) == set()
+
+
+def test_old_claims_expire(st, monkeypatch):
+    import app.storage
+    j = new_job(st)
+    st.add_claim(j, 7)
+    later = app.storage.time.time() + app.storage.CLAIM_SECONDS + 1
+    monkeypatch.setattr(app.storage.time, "time", lambda: later)
+    assert st.active_claims(j) == set()
+
+
+def test_company_page_is_claimed_once_per_run(st):
+    j = new_job(st)
+    url = "https://www.linkedin.com/company/acme/"
+    assert st.claim_about(j, url) is True
+    assert st.claim_about(j, url) is False
+    assert st.claim_about(new_job(st), url) is True       # another run reads it again
+
+
 # ------------------------------------------------------------------ ingest
 def test_ingest_saves_and_counts(st):
     j = new_job(st)
@@ -142,8 +180,8 @@ def test_no_location_filter_when_places_resolved(st):
 def test_set_text_filter_after_creation(st):
     j = new_job(st, places=["Bengaluru"])
     st.set_text_filter(j, [], ["123"])
-    r = st.ingest(j, [person(1, location="Mumbai, India")])
-    assert r["saved"] == 1 and st.get_job(j)["geo_ids"] == ["123"]
+    r = st.ingest(j, [person(1, location="Greater Bengaluru Area"), person(2, location="Mumbai, India")])
+    assert r["saved"] == 1 and r["counters"]["other_locations"] == 1 and st.get_job(j)["geo_ids"] == ["123"]
 
 
 def test_invalid_urls_are_counted_not_saved(st):

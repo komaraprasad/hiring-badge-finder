@@ -1,7 +1,9 @@
-# Hiring Badge Finder: complete workflow (version 1.40.0)
+# Hiring Badge Finder: complete workflow (version 1.50.0)
 
-> **1.40.0:** Step 5 (Company Industry / Size) is ON and runs in a second hidden tab WHILE the search runs.
-> Business Email, Hiring For, Hiring Company, Posted and the open-roles readers were removed. The Excel/CSV has 14 columns.
+> **1.50.0:** Step 5 (Company Industry / Size and Hiring For) is ON and runs WHILE the search runs. Its main way
+> is "fast details": each lead's profile data from LinkedIn's internal profile API (see step 5); the page-based
+> Tasks A and B below are the fallback. Hiring For came back in 1.49.0. The Excel/CSV has 15 columns.
+> Business Email, Hiring Company and Posted stay removed.
 
 This describes exactly how the tool works, step by step, so the same workflow can be rebuilt in
 another tool. File and endpoint names refer to this project.
@@ -28,9 +30,11 @@ Data store: one SQLite file `data/hiring_badge_finder.db`.
 
 - Runs in the person's own browser with their own LinkedIn sign-in. No headless browser, no login
   automation, no stored cookies or passwords.
-- Random **4-8 s pause before every LinkedIn page** (search pages, profiles, company pages).
+- Random **1-2.5 s pause before every LinkedIn page or request** (search pages, profile data, company
+  pages). Set in `extension/config.js` (`pacing`, `fastDetails`). The search and 2 lead-details readers
+  run at the same time, so LinkedIn sees up to 3 streams of requests together.
 - **Search:** max **30 result pages per run**, max **300 people read per day** per browser.
-- **Company details:** separate limits, max **60 pages per run** and **200 per day**.
+- **Company details:** separate limits, per run at least **60** (2 per requested lead + 10) and **600 per day**.
 - Stop **immediately** on any LinkedIn limit, "unusual activity", security check, captcha or sign-in
   page; keep that tab open so the person can see it.
 - Nothing is invented: a value that cannot be read stays empty.
@@ -92,7 +96,7 @@ LinkedIn filters by city only with its numeric location ID. Order tried:
 5. The server: classifies each person, drops people outside the asked cities (text check, only when no
    location ID was used), removes duplicates (same profile in this run or any earlier run), applies
    the daily cap, saves the new people, and answers **continue / stop**.
-6. If continue: the worker pauses 4-8 s, then loads `&page=N+1` in the same tab.
+6. If continue: the worker pauses 1-2.5 s, then loads `&page=N+1` in the same tab.
    Ends when: target reached, no more pages, 30 pages, daily cap, or a LinkedIn warning.
 
 ### What is saved per person (table `people`)
@@ -110,13 +114,25 @@ Company name rules (`app/detection.py`): email addresses are ignored; the name e
 `!!`, a lone ` l `, or a second `@`; a list ("A, B, C") is treated as unknown; "Ex-", "Former",
 "Alum" before "at" means a past job and is ignored.
 
-## 7. Step 5: Company Industry and Company Size (after the search)
+## 7. Step 5: Company Industry, Company Size and Hiring For (while the search runs)
 
-When the search ends, **the same hidden tab** fills company details. The server hands out **one task
-at a time** (`GET /api/details/next`), in this order:
+**Main way: fast details** (`fastDetails.on` in `extension/config.js`, `fastReader` in `background.js`).
+When the search opens, one more hidden tab opens `https://www.linkedin.com/robots.txt` (a plain linkedin.com
+page, so requests carry the person's session). 2 readers then loop:
+1. `POST /api/details/fast`: saves the lead just read, counts the next page against the limits and hands
+   out the next lead (claimed for 3 min, stored in the database, so two readers never get the same lead,
+   even after a server restart; a refused page frees its lead at once).
+2. Pause a random 1-2.5 s, then request that lead's **profile data from LinkedIn's internal profile API**
+   (`/voyager/api/identity/dash/profiles?...memberIdentity=<slug>`) inside the helper tab.
+3. From it: the current position (no end date) gives company, exact company link, industry and size.
+4. Open roles: a second request fetches the person's profile page HTML (`/in/<slug>/`, in the background,
+   never shown) and reads its "Hiring" box: up to 5 roles. Roles that show an age over 31 days are dropped.
+
+**Fallback (only when the profile data cannot be read): page-based tasks** in hidden tabs. The server hands
+out **one task at a time** (`GET /api/details/next`), in this order:
 
 **Task A, company named on the card** (and never looked up before):
-1. Pause 4-8 s, ask `POST /api/details/page` (counts the page; refuses past the limits).
+1. Pause 1-2.5 s, ask `POST /api/details/page` (counts the page; refuses past the limits).
 2. Open LinkedIn company search: `/search/results/companies/?keywords=<name>`.
 3. Keep the result only if exactly **one company page** carries that exact name (case, punctuation and
    Pvt/Ltd/Inc ignored). None or several different companies -> saved as `not_found` with the reason.
@@ -150,12 +166,10 @@ the values of the company with the same name. Unknown -> empty.
   text) -> **Export filtered** / **Export all**. CSV at `/api/export.csv`.
 - Excel: a formatted table (filters, frozen header, clickable LinkedIn links, real dates);
   spreadsheet formulas in cell text are neutralised.
-- Columns, in order: Person Name, Current Designation, Company Name, **Company Industry**,
-  (14 columns) Person Name, Current Designation, Headline, Location, Location Matches Search, Person LinkedIn URL,
-  Hiring Status, Company Name, Company Industry, Company Size, Company Website, Source Platform,
-  Date Collected (IST), Last Verified Date (IST)
-  Headline Has Searched Title (Yes/No), Location Matches Search (Yes/No).
-- Wait for "Company details: done" before exporting, or the two company columns are still filling.
+- Columns, in order (15): Person Name, Current Designation, Headline, Location, Location Matches Search,
+  Person LinkedIn URL, Hiring Status, Company Name, Company Industry, Company Size, Company Website,
+  Source Platform, Hiring For (Open Roles), Date Collected (IST), Last Verified Date (IST).
+- Wait for "Lead details: done" before exporting, or the company columns are still filling.
 
 ## 9. Server API (summary)
 

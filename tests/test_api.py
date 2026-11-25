@@ -186,8 +186,13 @@ def test_geo_resolved_turns_text_filter_off(client):
     job_id = start(client).json()["job_id"]
     g = client.post("/api/search/geo", json={"job_id": job_id, "geo_ids": ["102713980"]})
     assert g.json()["text_filter"] is False
-    r = client.post("/api/ingest", json={"job_id": job_id, "people": [person(1, location="Mumbai")]})
-    assert r.json()["saved"] == 1
+    # No text filter: a wider region of the place ("India") and an empty location are kept;
+    # a location that clearly names another place is still skipped.
+    r = client.post("/api/ingest", json={"job_id": job_id, "people": [
+        person(1, location="India"), person(2, location=""), person(3, location="Mumbai")]})
+    assert r.json()["saved"] == 2
+    st = client.get("/api/status", params={"job_id": job_id}).json()
+    assert st["other_locations"] == 1
 
 
 def test_error_and_finish_endpoints(client):

@@ -14,6 +14,7 @@ import json
 import os
 import re
 import sqlite3
+import time
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -21,7 +22,7 @@ from datetime import datetime, timedelta, timezone
 from .detection import BADGE, LIKELY, NOT_HIRING, classify, looks_like_job_title, parse_title_company, strip_degree
 from .normalize import normalize_profile_url
 from .website import _GENERIC as _GENERIC_SITE_STEMS
-from .urlbuilder import location_matches
+from .urlbuilder import clearly_elsewhere, location_matches
 
 # India has no daylight saving, so a fixed +05:30 offset is exact.
 IST = timezone(timedelta(hours=5, minutes=30), "IST")
@@ -35,6 +36,7 @@ STALE_JOB_MINUTES = 15
 MAX_DETAIL_PAGES_PER_RUN = 60       # at least; a run may use 2 per requested lead + 10 (Experience + About page)
 MAX_DETAIL_PAGES_PER_DAY = 600      # 2 per person at the 300-people-a-day limit (separate from search pages)
 COMPANY_STATUSES = ("found", "not_found")
+CLAIM_SECONDS = 180                 # a details tab that claimed a lead and went quiet frees it after 3 min
 
 WEBSITE_COLUMNS = ("company_website", "website_checked")   # website_checked: when looked up
 # company_url: the exact company page from the person's profile; profile_checked: when it was read.
@@ -131,6 +133,19 @@ CREATE TABLE IF NOT EXISTS companies (        -- read once from the company's Li
 CREATE TABLE IF NOT EXISTS detail_pages_by_day (   -- LinkedIn pages loaded for company details
   day TEXT PRIMARY KEY,
   count INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS detail_claims (       -- a lead one details tab is reading now (kept across restarts)
+  job_id TEXT NOT NULL,
+  person_id INTEGER NOT NULL,
+  claimed REAL NOT NULL,                        -- unix time; a claim older than CLAIM_SECONDS is free again
+  PRIMARY KEY (job_id, person_id)
+);
+
+CREATE TABLE IF NOT EXISTS about_claims (        -- a company About page one tab reads for this run (once per run)
+  job_id TEXT NOT NULL,
+  url TEXT NOT NULL,
+  PRIMARY KEY (job_id, url)
 );
 
 CREATE TABLE IF NOT EXISTS settings (
@@ -429,6 +444,7 @@ class Storage:
             places = json.loads(job["text_filter_places"] or "[]")
             roles = json.loads(job["roles"])
             locs = json.loads(job["locations"])
+            geo_filtered = bool(json.loads(job["geo_ids"] or "[]"))
             target = int(job["target"])
 
             counters = {k: int(job[k]) for k in JOB_COUNTERS}
@@ -475,6 +491,11 @@ class Storage:
                     continue
                 location = (p.get("location") or "").strip()
                 if places and not location_matches(location, places):
+                    counters["other_locations"] += 1
+                    continue
+                # Filtered by LinkedIn location IDs: still skip someone whose location clearly names
+                # another place (LinkedIn's place filter lets a few through).
+                if not places and geo_filtered and clearly_elsewhere(location, locs):
                     counters["other_locations"] += 1
                     continue
                 # "Date posted": skip only when the newest open role is KNOWN to be older than asked.
@@ -638,6 +659,30 @@ class Storage:
                     return {"kind": "profile", "person_id": r["id"], "url": r["profile_url"]}
         return None
 
+    # Claims live in the database, so a server restart (e.g. a Render deploy) never lets two tabs
+    # read the same lead or company page, and never counts that page twice.
+    def active_claims(self, job_id: str) -> set:
+        """People a details tab claimed less than CLAIM_SECONDS ago (older claims are dropped)."""
+        with self._tx() as c:
+            c.execute("DELETE FROM detail_claims WHERE job_id=? AND claimed<?", (job_id, time.time() - CLAIM_SECONDS))
+            return {r["person_id"] for r in c.execute("SELECT person_id FROM detail_claims WHERE job_id=?", (job_id,))}
+
+    def add_claim(self, job_id: str, person_id: int) -> None:
+        with self._tx() as c:
+            c.execute("INSERT INTO detail_claims(job_id, person_id, claimed) VALUES(?,?,?) "
+                      "ON CONFLICT(job_id, person_id) DO UPDATE SET claimed=excluded.claimed",
+                      (job_id, person_id, time.time()))
+
+    def release_claim(self, job_id: str, person_id: int) -> None:
+        with self._tx() as c:
+            c.execute("DELETE FROM detail_claims WHERE job_id=? AND person_id=?", (job_id, person_id))
+
+    def claim_about(self, job_id: str, url: str) -> bool:
+        """True for the first tab to ask for this company page in this run; False when one already has it."""
+        with self._tx() as c:
+            return c.execute("INSERT OR IGNORE INTO about_claims(job_id, url) VALUES(?,?)",
+                             (job_id, url)).rowcount > 0
+
     def set_hiring_for(self, job_id: str, person_id: int, roles: list[str]) -> None:
         """Open roles ("Hiring: <job>") read from LinkedIn's profile data for this lead. Empty = none shown."""
         text = " | ".join(" ".join(r.split())[:200] for r in roles if r and r.strip())[:600]
@@ -766,6 +811,7 @@ class Storage:
             d["hiring_for"] = d.get("hiring_for") or ""
             d["open_role_match"] = (open_role_match(d["hiring_for"], skills_by_job.get(d.get("job_id"), []))
                                     if d.get("roles_checked") else "")      # never read: say nothing
+            d["skills_asked"] = bool(skills_by_job.get(d.get("job_id")))   # dashboard: "✓ match" only then
             out.append(d)
         return out
 

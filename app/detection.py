@@ -158,6 +158,8 @@ def parse_title_company(headline: str) -> tuple[str, str]:
     if _SLOGAN_RE.match(title):                  # "We're hiring @ Nutanix": no title, only the company
         title = ""
     company = _COMPANY_END_RE.split(_PART_END_RE.split(m.group("company"))[0])[0].strip(" |-–—")
+    if company.count("(") > company.count(")"):   # cut inside a bracket: "Paninian ( Hiring" -> "Paninian"
+        company = company[:company.rfind("(")].strip(" |-–—")
     if company.endswith(".") and not re.search(r"\b(?:inc|ltd|co|corp|llc|pvt|bros)\.$", company, re.IGNORECASE):
         company = company.rstrip(".")             # "Nutanix." -> "Nutanix"; "Acme, Inc." keeps its dot
     if _LIST_RE.search(company):
