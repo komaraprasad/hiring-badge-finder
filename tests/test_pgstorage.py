@@ -55,6 +55,15 @@ def test_pragma_table_info():
     assert "information_schema.columns" in out and "'jobs'" in out
 
 
+def test_schema_splits_into_whole_statements():
+    """Postgres runs SCHEMA one statement at a time, split at every ';' (comments included).
+    A ';' inside a comment cut a CREATE TABLE in two and every database call failed (HTTP 500)."""
+    for stmt in (s for s in SCHEMA.split(";") if s.strip()):
+        code = "\n".join(line.split("--")[0] for line in stmt.splitlines()).strip()
+        assert code.upper().startswith(("CREATE TABLE", "CREATE INDEX")), stmt[:120]
+        assert code.count("(") == code.count(")"), stmt[:120]
+
+
 def test_schema_translates_without_sqlite_only_words():
     for stmt in (s for s in SCHEMA.split(";") if s.strip()):
         out = translate(stmt)

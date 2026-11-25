@@ -138,7 +138,7 @@ CREATE TABLE IF NOT EXISTS detail_pages_by_day (   -- LinkedIn pages loaded for 
 CREATE TABLE IF NOT EXISTS detail_claims (       -- a lead one details tab is reading now (kept across restarts)
   job_id TEXT NOT NULL,
   person_id INTEGER NOT NULL,
-  claimed REAL NOT NULL,                        -- unix time; a claim older than CLAIM_SECONDS is free again
+  claimed REAL NOT NULL,                        -- unix time, a claim older than CLAIM_SECONDS is free again
   PRIMARY KEY (job_id, person_id)
 );
 
