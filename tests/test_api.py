@@ -287,6 +287,18 @@ def test_same_search_continues_and_resume_off_starts_fresh(client):
     assert other["start_page"] == 1
 
 
+def test_continue_is_kept_per_browser(client):
+    """Each browser (each person's own LinkedIn account) continues from ITS last page; another
+    browser running the same search starts at page 1 and so reads its own first pages."""
+    me, other = {"X-HBF-Client": "browser-a"}, {"X-HBF-Client": "browser-b"}
+    body = {"roles": ["Recruiter"], "locations": ["Hyderabad, Telangana, India"], "keywords": [], "target": 25}
+    j = client.post("/api/search/start", json=body, headers=me).json()
+    client.post("/api/ingest", json={"job_id": j["job_id"], "people": [person(i, frame=False) for i in range(10)]})
+    client.post("/api/search/finish", json={"job_id": j["job_id"], "reason": "stopped"})
+    assert client.post("/api/search/start", json=body, headers=other).json()["start_page"] == 1
+    assert client.post("/api/search/start", json=body, headers=me).json()["start_page"] == 2
+
+
 def test_rewind_endpoint(client):
     j = start(client).json()["job_id"]
     assert client.post("/api/search/rewind", json={"job_id": j}).json()["ok"] is True

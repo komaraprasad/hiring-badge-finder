@@ -613,7 +613,18 @@
     if (!res.ok) throw new Error((data && (data.detail && (data.detail.message || data.detail) || data.message)) || ('Error ' + res.status));
     return data;
   };
-  const post = (path, body) => api(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
+  // One random id per browser: the server keeps "continue from where the last same search stopped"
+  // per browser (each person's own LinkedIn account), not shared by everyone using this dashboard.
+  const clientId = (() => {
+    try {
+      let id = localStorage.getItem('hbf-client');
+      if (!id) { id = (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + '-' + Math.random().toString(36).slice(2)); localStorage.setItem('hbf-client', id); }
+      return id;
+    } catch (e) { return ''; }                      // storage blocked: no id, the server still works
+  })();
+  const post = (path, body) => api(path, { method: 'POST',
+    headers: Object.assign({ 'Content-Type': 'application/json' }, clientId ? { 'X-HBF-Client': clientId } : {}),
+    body: JSON.stringify(body || {}) });
 
   // ---------------------------------------------------------------- theme
   const root = document.documentElement;

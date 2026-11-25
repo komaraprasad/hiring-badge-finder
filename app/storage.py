@@ -395,8 +395,13 @@ class Storage:
     def next_page(self, search_key: str) -> int:
         """Page an identical search should start at (1 when never run or at the end)."""
         with self._read() as c:
-            r = c.execute("SELECT next_page FROM search_progress WHERE search_key=?", (search_key,)).fetchone()
-        return int(r["next_page"]) if r else 1
+            r = c.execute("SELECT next_page, updated FROM search_progress WHERE search_key=?",
+                          (search_key,)).fetchone()
+        # Continue only on the same day (IST): LinkedIn reorders results and new people show the
+        # frame every day, so a new day starts at page 1 (already-saved people are still skipped).
+        if not r or not str(r["updated"] or "").startswith(today_ist()):
+            return 1
+        return int(r["next_page"])
 
     def rewind_job(self, job_id: str) -> bool:
         """The continued page was empty; the extension reloads page 1 for this same job."""

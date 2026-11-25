@@ -178,6 +178,12 @@ setting, in any order or case), the next page to read. Running it again opens Li
 (`&page=N`) instead of re-reading pages you already collected, so it takes seconds per *new* page. The random 1 to
 2.5 second safety wait between pages is unchanged.
 
+- **Per browser:** the page is remembered separately for each browser (each person's own LinkedIn account, which
+  sees its own result order). Someone else running the same search starts at page 1 in their account, so their
+  own first pages are never skipped. Already-saved people are still skipped, so there are no duplicates.
+- **Same day only (India time):** a new day starts at page 1 again (new people put on the frame every day and
+  LinkedIn reorders results).
+
 - If a run stopped part-way through a page (target or daily limit), that page is read again next time so nobody
   is skipped (already-saved people are skipped as usual).
 - At the end of LinkedIn's results the next run starts at page 1 again.

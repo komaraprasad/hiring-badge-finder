@@ -16,7 +16,7 @@ import zipfile
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
@@ -285,8 +285,11 @@ def post_settings(body: SettingsBody):
 POSTED_WITHIN = "month"
 
 
+_CLIENT_RE = re.compile(r"^[A-Za-z0-9-]{1,64}$")
+
+
 @app.post("/api/search/start")
-def search_start(body: StartBody):
+def search_start(body: StartBody, x_hbf_client: str = Header("", alias="X-HBF-Client")):
     roles = clean_list(body.roles, MAX_ROLES)
     places = clean_list(body.locations, MAX_LOCATIONS)
     keywords = clean_list(body.keywords, MAX_KEYWORDS)
@@ -297,7 +300,10 @@ def search_start(body: StartBody):
     if body.target not in VALID_TARGETS:
         raise HTTPException(400, "Leads wanted must be 25, 50, 75 or 100.")
     ah = db().get_settings()["actively_hiring"]
-    key = search_key(roles, places, keywords, ah) + POSTED_WITHIN
+    # Where to continue is kept per browser (each person's own LinkedIn account sees its own result
+    # order), so one person's progress never makes another skip their own first pages.
+    client = x_hbf_client if _CLIENT_RE.match(x_hbf_client or "") else ""
+    key = search_key(roles, places, keywords, ah) + POSTED_WITHIN + "|" + client
     page = db().next_page(key) if body.resume else 1
     try:
         # Until the extension confirms location IDs, filter by location text.

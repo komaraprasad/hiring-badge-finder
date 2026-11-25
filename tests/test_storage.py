@@ -479,6 +479,17 @@ def test_xlsx_is_a_formatted_table_with_links_and_dates(st):
     assert "'=cmd" in names                                           # formula injection still blocked
 
 
+def test_continue_only_on_the_same_day(st, monkeypatch):
+    """Continue from the last page only on the same day (IST); a new day starts at page 1."""
+    import app.storage
+    key = "same-day-key"
+    j = st.create_job(["EM"], ["Bengaluru"], [], 25, search_key=key)
+    st.ingest(j, [person(i, frame=False) for i in range(10)])
+    assert st.next_page(key) == 2                                    # same day: continue
+    monkeypatch.setattr(app.storage, "today_ist", lambda: "2999-01-01")
+    assert st.next_page(key) == 1                                    # next day: page 1
+
+
 def test_xlsx_without_people_still_opens():
     ws = load_workbook(io.BytesIO(export.to_xlsx([]))).active
     assert [c.value for c in ws[1]] == export.COLUMNS and not ws.tables
