@@ -25,6 +25,14 @@ def test_content_scripts_are_scoped():
     assert search["matches"] == ["https://www.linkedin.com/search/results/people*"]
     bridge = by_js[("dashboard_bridge.js",)]
     assert not any("linkedin.com" in m for m in bridge["matches"])
+    # The dashboard also works inside another site's frame (LeadDeck shows it in an iframe).
+    assert bridge.get("all_frames") is True
+
+
+def test_search_results_go_to_the_dashboard_frame_not_the_tab():
+    bg = (EXT / "background.js").read_text(encoding="utf-8")
+    assert "openSearch(msg, sender.tab, sender.url)" in bg
+    assert "dashboardOrigin({ url: frameUrl || senderTab.url })" in bg
 
 
 def test_every_file_in_manifest_exists():

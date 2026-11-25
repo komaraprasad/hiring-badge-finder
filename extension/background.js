@@ -296,7 +296,7 @@ async function learnPlace(tabId, id, how) {
   return true;
 }
 
-async function openSearch(msg, senderTab) {
+async function openSearch(msg, senderTab, frameUrl) {
   let url = String(msg.url || '');
   // Every place needs its LinkedIn location ID, so LinkedIn itself filters by the chosen places.
   // Any place without one: open nothing (no reads used) and say which places need setting up.
@@ -320,7 +320,8 @@ async function openSearch(msg, senderTab) {
   // getJob answers "pending" for a few seconds after any search is opened.
   await chrome.storage.session.set({ lastOpenAt: Date.now() });
 
-  const server = (senderTab && dashboardOrigin(senderTab)) || await getServerUrl();
+  // The dashboard may sit inside another site's frame (LeadDeck): use the FRAME's own address, not the tab's.
+  const server = (senderTab && dashboardOrigin({ url: frameUrl || senderTab.url })) || await getServerUrl();
   const createProps = { url, active: false };
   if (senderTab && senderTab.windowId != null) createProps.windowId = senderTab.windowId;
   const tab = await chrome.tabs.create(createProps);   // active:false - focus never moves
@@ -852,7 +853,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         case 'open': {    // from dashboard_bridge.js
           // The search sends its results to this dashboard's own address (openSearch keeps it on
           // the search); the Options value is left alone and only used as a fallback.
-          return sendResponse(await openSearch(msg, sender.tab));
+          return sendResponse(await openSearch(msg, sender.tab, sender.url));
         }
 
         case 'teachInfo': { // from content_search.js: is this tab a location set-up tab? for which place?
