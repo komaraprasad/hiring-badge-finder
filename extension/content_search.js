@@ -95,6 +95,14 @@
       };
       const cards = pick(CFG.cardSelector, false);
       lastLayout = 'current';
+      // A few listitems may be some other block on the page (e.g. a highlighted box of 2 people) while the
+      // real results list is drawn differently for this account: when the layout-free finder sees MORE
+      // different people, it is the results list. (Seen: one account read 2 people while LinkedIn showed 10.)
+      if (cards.length && cards.length < 8) {
+        const people = (els) => new Set(els.map((c) => Array.from(c.querySelectorAll(CFG.profileLink)).map(profilePath).find(Boolean)).filter(Boolean)).size;
+        const generic = repeatedList(rootEl);
+        if (people(generic) > people(cards)) return generic;
+      }
       if (cards.length) return cards;
       lastLayout = 'older';             // whatever is found below is LinkedIn's older page design
       // Older LinkedIn layout: only when the main marker finds nothing, and only real lists (2+ people).
@@ -292,10 +300,11 @@
 
   /** People to send, plus how many framed photos were skipped for having no hiring link. */
   function readAll() {
-    const people = findCards().map(readCard).filter((p) => p.profile_url);
+    const cards = findCards();
+    const people = cards.map(readCard).filter((p) => p.profile_url);
     const skipped = people.filter((p) => p.framed_skipped).length;
     people.forEach((p) => { delete p.framed_skipped; });
-    return { people, skipped };
+    return { people, skipped, cardCount: cards.length };   // cardCount includes private "LinkedIn Member" cards
   }
 
   // -------------------------------------------------------------- page state
@@ -754,6 +763,8 @@
       state = pageState();
       if (!ready && state.kind === 'ok') {
         if (firstOfRun && page > 1) return rewind();
+        // A later page with nothing to read (we went on without a Next button): the results have ended.
+        if (!firstOfRun) return finish('no more pages');
         const shown = new Set(Array.from(document.querySelectorAll(CFG.profileLink)).map(profilePath).filter(Boolean)).size;
         const facts = `[ext ${chrome.runtime.getManifest().version}; ${shown} person links, ` +
           `${document.querySelectorAll('[role="listitem"]').length} listitems, ${document.querySelectorAll('li').length} li]`;
@@ -776,7 +787,7 @@
     }
 
     await renderAllCards();
-    const { people, skipped } = readAll();
+    const { people, skipped, cardCount } = readAll();
     if (firstOfRun && lastLayout === 'older' && job.activelyHiring) {
       // Nothing is saved and no reads are counted: these results are not filtered to people who hire.
       return fail('layout', 'LinkedIn showed its older page for this search, which ignores the "Actively hiring" ' +
@@ -797,7 +808,11 @@
     beat(`page ${page}: saved ${verdict.saved}/${verdict.target}`);
     if (!verdict.continue) { await send({ type: 'done' }); return; }
     if (pagesDone >= maxPages) return finish('page limit reached');
-    if (!nextEnabled(findNext())) return finish('no more pages');
+    // A Next button that is there but switched off = the last page. No Next button we recognise (another
+    // page design) on a full page = carry on by address; an empty next page then ends the search.
+    const nextBtn = findNext();
+    if (nextBtn && !nextEnabled(nextBtn)) return finish('no more pages');
+    if (!nextBtn && cardCount < CFG.pacing.fullPage) return finish('no more pages');
 
     // Random 4-8 s pause, then the next page. Done by the background worker: this hidden tab may be
     // frozen by the browser at any moment, and must not be the one waiting.

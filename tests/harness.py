@@ -186,6 +186,16 @@ def results_page(page: int, variant: str = "") -> str:
                 "<style>.sr-only{position:absolute;left:-9999px} img{width:48px;height:48px}</style></head>"
                 f"<body><header><a href='/in/me/'>Me</a></header><main>{sidebar}<div><div>{items}</div></div>"
                 "<button aria-label='Next' disabled>Next</button></main></body></html>")
+    if variant == "decoy":          # seen on another account: a small box of 2 people uses role="listitem", the
+        # real 10 results are plain divs, and there is no Next button the tool knows
+        decoys = "".join(f'<div role="listitem"><a href="/in/decoy-{i}/"><img alt="" src="{photo_src(True, f"decoy-{i}")}">'
+                         f'Decoy Person {i}</a><span>• 2nd</span><button>Connect</button></div>' for i in range(2))
+        items = "".join(classic_card_html(p).replace("<li ", "<div ").replace("</li>", "</div>")
+                        for p in people_for_page(page))
+        return ("<!doctype html><html><head><meta charset='utf-8'><title>Search</title>"
+                "<style>.sr-only{position:absolute;left:-9999px} img{width:48px;height:48px}</style></head>"
+                f"<body><main><section>{decoys}</section><div><div>{items}</div></div>"
+                "<nav><span>1</span><span>2</span></nav></main></body></html>")
     if variant == "sidebarfirst":   # the newer layout's cards arrive late; a sidebar is already there
         page_html = results_page(page, "")
         return page_html.replace("<body>", "<body>" + sidebar, 1).replace(

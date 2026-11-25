@@ -89,6 +89,7 @@
     // "Cautious" fast mode (chosen Nov 2026, goal: a run in about a minute): a random 1-2.5 s pause
     // before each results page instead of 4-8 s. Daily caps (server) are unchanged.
     pacing: { minWaitMs: 1000, maxWaitMs: 2500, maxPages: 30,
+              fullPage: 8,       // with no Next button found, a page with at least this many people goes on to the next page
               detailTabs: 2 },   // classic company-details tabs: only used when fast details cannot read
 
     // --- Fast lead details (1.46.0) ----------------------------------------

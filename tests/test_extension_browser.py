@@ -503,6 +503,18 @@ def test_any_layout_is_read_from_the_page_structure(env):
     assert "page 1: 10 cards, 3 badges, 1 framed without open roles (skipped), 5 with open roles" in env.h.heartbeats
 
 
+def test_small_listitem_box_does_not_hide_the_real_results(env):
+    """Another account's page: 2 people in a box marked role="listitem", the real results drawn as
+    plain divs, no Next button the tool knows. All results are read, every page, until the end."""
+    job_id = new_job(env)
+    env.launch(job_id, "&variant=decoy")
+    job = env.wait_job(job_id)
+    assert env.h.errors == []
+    assert job["status"] == "done" and job["end_reason"] == "no more pages"
+    assert (job["pages"], job["total_read"]) == (2, 20)                 # was (1, 2): only the box was read
+    assert not any(p["name"].startswith("Decoy") for p in env.h.ingested)
+
+
 def test_late_results_are_not_confused_with_a_sidebar(env):
     job_id = new_job(env)
     env.launch(job_id, "&variant=sidebarfirst")
