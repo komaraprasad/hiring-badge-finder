@@ -80,9 +80,12 @@
   .console > * { min-width: 0; }
   .stack { display: grid; gap: 24px; } .stack > * { min-width: 0; }
   /* The search form stays in place while the results scroll; when it is taller than the window it scrolls
-     on its own, and scrolling over it never moves the page */
+     on its own. At its end the scroll passes on to the page (it used to stop there, so with the mouse over
+     the form the page could not be scrolled at all). */
   .console > :first-child { position: sticky; top: 88px; max-height: calc(100vh - 88px - 48px); overflow-y: auto;
-    overscroll-behavior: contain; scrollbar-gutter: stable; }
+    scrollbar-gutter: stable; }
+  /* Short windows (e.g. inside LeadDeck's frame): no inner scroll box, the whole page scrolls normally */
+  @media (max-height: 820px) { .console > :first-child { position: static; max-height: none; overflow: visible; } }
   .tagline { margin: 6px 0 0; color: var(--muted); }
   .head-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
   .chipcap { font-family: var(--mono); font-size: 11px; letter-spacing: .08em; padding: 4px 10px; border-radius: 6px; color: var(--brand);
@@ -836,10 +839,12 @@
     const key = (m) => m.replace(/\d+s\b/, '').trim();
     // same step again (e.g. the countdown "waiting 6s" -> "4s" -> "2s"): keep the first line as it was
     if (last && (last.dataset.msg === msg || key(last.dataset.msg) === key(msg))) return;
+    // Follow new lines only when the reader is already at the bottom; someone scrolled up to read is left there
+    const atEnd = tl.scrollHeight - tl.scrollTop - tl.clientHeight < 24;
     const li = document.createElement('li'); li.dataset.msg = msg;
     li.innerHTML = '<time>' + clock() + '</time><span></span>'; li.lastElementChild.textContent = msg;
     tl.appendChild(li); while (tl.children.length > 40) tl.firstElementChild.remove();
-    tl.scrollTop = tl.scrollHeight;
+    if (atEnd) tl.scrollTop = tl.scrollHeight;
   }
   const setNum = (id, n) => { const el = $(id); const v = String(n || 0); if (el.textContent !== v) { el.textContent = v; el.classList.add('bump'); setTimeout(() => el.classList.remove('bump'), 600); } };
 
