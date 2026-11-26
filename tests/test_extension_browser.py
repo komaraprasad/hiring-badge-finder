@@ -46,7 +46,9 @@ def build_test_extension(dest: Path, base: str, cards_timeout_ms: int | None = N
     """
     shutil.copytree(EXT_SRC, dest)
     m = json.loads((dest / "manifest.json").read_text())
-    m["content_scripts"][0]["matches"].append("http://localhost/search/results/people*")
+    for c in m["content_scripts"]:            # the search reader and the page-visibility helper
+        if "content_search.js" in c["js"] or "page_visibility.js" in c["js"]:
+            c["matches"].append("http://localhost/search/results/people*")
     co = next(c for c in m["content_scripts"] if "content_company.js" in c["js"])
     co["matches"] += ["http://localhost/search/results/companies*", "http://localhost/company/*", "http://localhost/in/*"]
     (dest / "manifest.json").write_text(json.dumps(m))
@@ -533,6 +535,30 @@ def test_results_the_tab_never_draws_are_read_from_linkedins_page_data(env):
     assert p1["location"] == "Bengaluru, Karnataka, India"
     assert p1["profile_url"] == "https://www.linkedin.com/in/person-1"
     assert got["Person 9"]["badge_frame"] is False                         # its mutual's framed avatar doesn't count
+
+
+def test_results_loaded_only_when_visible_are_loaded_in_the_background_tab(env):
+    """The other accounts' page: only 2 people arrive; LinkedIn's page loads the rest when its "load more"
+    area is visible, which a background tab never is. The page is told it is visible, loads its own
+    results, and every person on every page is read with the same rules."""
+    job_id = new_job(env)
+    env.launch(job_id, "&variant=lazyload")
+    job = env.wait_job(job_id, timeout=90)
+    assert env.h.errors == []
+    assert (job["pages"], job["total_read"], job["saved"]) == (2, 20, 5)       # was (1, 2, ...)
+    assert "page 1: 10 cards, 3 badges, 1 framed without open roles (skipped), 5 with open roles" in env.h.heartbeats
+    assert env.h.diagnostics == []
+
+
+def test_visibility_help_is_only_on_search_pages_and_only_while_hidden():
+    import json as _json
+    m = _json.loads((EXT_SRC / "manifest.json").read_text(encoding="utf-8"))
+    cs = next(c for c in m["content_scripts"] if c["js"] == ["page_visibility.js"])
+    assert cs["matches"] == ["https://www.linkedin.com/search/results/people*"]
+    assert cs["world"] == "MAIN" and cs["run_at"] == "document_start"
+    src = (EXT_SRC / "page_visibility.js").read_text(encoding="utf-8")
+    assert "if (!hidden() || !target) return;" in src and "if (!hidden()) return nativeRaf(cb);" in src
+    assert "fetch(" not in src and "chrome." not in src and "postMessage" not in src   # changes visibility only
 
 
 def test_results_only_in_the_react_stream_are_rebuilt_and_read(env):

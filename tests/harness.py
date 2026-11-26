@@ -265,6 +265,25 @@ def results_page(page: int, variant: str = "") -> str:
 <body><main><div data-testid="lazy-column"><div role="list" id="list">{cards}</div></div><a href="#">More</a></main>
 <script>for (const c of Array.from(document.querySelectorAll('#list > [role=listitem]')).slice(2)) c.remove();</script>
 </body></html>"""
+    if variant == "lazyload":
+        # The other accounts' page (seen Nov 2026): the server sends only 2 people; the rest are loaded when
+        # the "load more" area becomes VISIBLE (IntersectionObserver), and drawn in an animation frame. The area
+        # is off-screen and the page cannot scroll, so the browser alone never loads them. No count, no Next.
+        allc = [card_html(p) for p in people_for_page(page)]
+        return f"""<!doctype html><html><head><meta charset="utf-8"><title>Search results</title>
+<script>// like the real background tab on those accounts: the page sees itself as hidden
+Object.defineProperty(Document.prototype, 'visibilityState', {{ get() {{ return 'hidden'; }} }});</script>
+<style>html,body{{height:100%;overflow:hidden;margin:0}} .sr-only{{position:absolute;left:-9999px}}
+figure{{margin:0;display:inline-block}} img{{width:48px;height:48px}} #more{{position:absolute;top:100000px;height:10px}}</style></head>
+<body><main><div data-testid="lazy-column"><div role="list" id="list">{"".join(allc[:2])}</div><div id="more"></div></div></main>
+<script>const REST = {json.dumps(allc[2:])};
+const io = new IntersectionObserver((es) => {{
+  if (!es.some((e) => e.isIntersecting)) return;
+  io.disconnect();
+  requestAnimationFrame(() => {{ for (const c of REST) document.getElementById('list').insertAdjacentHTML('beforeend', c); }});
+}});
+io.observe(document.getElementById('more'));</script>
+</body></html>"""
     if variant == "stream":
         # LinkedIn's newer page as its server sends it: the HTML holds only the first 2 people; all 10 are in
         # the React Server Components stream inside a script (an escaped JavaScript string). The tab draws 2.
