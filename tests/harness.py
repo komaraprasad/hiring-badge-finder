@@ -741,8 +741,13 @@ class Harness:
                     # a free account: with the Premium "Actively hiring" filter LinkedIn shows only 2 people
                     outer.search_loads.append(u.path + "?" + u.query)
                     two = "".join(card_html(p) for p in people_for_page(1)[:2])
+                    # freeahmention: two more people are only MENTIONED on the page, each with a linked name
+                    # ("X is hiring"), as seen on a real free account: they are not results.
+                    mentions = ("<div><a href='/in/mention-one/'>Mention One</a> is hiring</div>"
+                                "<div><a href='/in/mention-two/'>Mention Two</a> is hiring</div>"
+                                if "freeahmention" in q else "")
                     return self._send(200, "<!doctype html><title>Search</title><main><div role='list'>" + two +
-                                      "</div><p>Upgrade to Premium to see more</p></main>", "text/html")
+                                      "</div>" + mentions + "<p>Upgrade to Premium to see more</p></main>", "text/html")
                 if u.path.startswith("/search/results/people"):
                     outer.search_loads.append(u.path + "?" + u.query)
                     outer.order.append("search:" + q.get("page", ["1"])[0])

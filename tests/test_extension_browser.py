@@ -595,6 +595,21 @@ def test_free_account_actively_hiring_cutoff_searches_again_without_the_filter(e
     assert "hiring" in later[0]                                                   # the word "hiring" required instead
 
 
+def test_free_account_cutoff_is_found_even_when_other_people_are_only_mentioned_on_the_page(env):
+    """Seen on a real free account: LinkedIn shows 2 results, and 2 more people appear on the page only as
+    linked names ("X is hiring"). They are not results, so the cut-off is still 2 people and the search runs
+    again without the filter (the first version counted all 4 and read 1 lead, "no more pages")."""
+    job_id = new_job(env)
+    env.launch(job_id, "&freeah=1&freeahmention=1&activelyHiringForJobTitles=%5B%22-100%22%5D")
+    job = env.wait_job(job_id, timeout=90)
+    assert env.h.errors == []
+    assert (job["pages"], job["total_read"], job["saved"]) == (2, 20, 5)       # same as the plain free-account run
+    assert any("Searching again without it" in m for m in env.h.heartbeats)
+    assert any(n.get("note") == "filter not applied (free account)" for n in env.h.notes)
+    later = [u for u in env.h.search_loads[1:]]
+    assert later and not any("activelyHiringForJobTitles" in u for u in later)
+
+
 def test_results_in_their_own_scrolling_box_are_loaded_by_scrolling_it(env):
     """The failing accounts' page is one window tall; its results are in their own scrolling box and more
     people load only when that box is scrolled. The box is scrolled like a mouse wheel would: every page read."""

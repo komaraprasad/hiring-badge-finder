@@ -102,6 +102,10 @@
   // Which LinkedIn page design the last findCards() read: 'current' or 'older'.
   // The older design ignores the "Actively hiring" filter and only draws results while the tab is visible.
   let lastLayout = 'current';
+  // How many DIFFERENT people the results list itself holds, counted from the main card marker only
+  // (the last findCards() call). The fallback finders can add people who are only MENTIONED on the page
+  // (a mutual connection or an "X is hiring" line with a linked name), which must not hide a cut-off page.
+  let lastPrimaryPeople = 0;
 
   /** Find one container element per person. */
   /** Different people among cards (by each card's first person link). */
@@ -136,6 +140,7 @@
   /** Find one container element per person. */
   function findCards(rootEl) {
     rootEl = rootEl || document;
+    lastPrimaryPeople = 0;
     if (CFG.cardSelector) {
       const pick = (sel, needImage) => {
         let found = [];
@@ -145,6 +150,7 @@
         return found.filter((c) => !found.some((o) => o !== c && o.contains(c)));
       };
       const cards = pick(CFG.cardSelector, false);
+      lastPrimaryPeople = peopleIn(cards);
       lastLayout = 'current';
       // Fewer than a page of different people from the usual markers: the results may be drawn another way
       // for this account (seen: a box of 2 people; and LinkedIn's AI search, whose listitems are small parts
@@ -347,7 +353,8 @@
     const people = cards.map(readCard).filter((p) => p.profile_url && !once.has(p.profile_url) && once.add(p.profile_url));
     const skipped = people.filter((p) => p.framed_skipped).length;
     people.forEach((p) => { delete p.framed_skipped; });
-    return { people, skipped, cardCount: cards.length };   // cardCount includes private "LinkedIn Member" cards
+    // cardCount includes private "LinkedIn Member" cards; primaryPeople counts only the results list's own people
+    return { people, skipped, cardCount: cards.length, primaryPeople: lastPrimaryPeople };
   }
 
   // ------------------------------------------- LinkedIn's page data (React Server Components stream)
@@ -1085,14 +1092,17 @@
     }
 
     await renderAllCards(page);
-    let { people, skipped, cardCount } = readAll();
+    let { people, skipped, cardCount, primaryPeople } = readAll();
     // Free accounts: LinkedIn's "Actively hiring" filter is a Premium filter, and on a free account LinkedIn
     // shows only the first 2-3 people with it (the rest are kept for Premium). Seen on every free account
     // tested (Nov 2026). Search again WITHOUT the filter, in this tab, before any read is counted: every
     // person is still checked for the #HIRING frame and "See open roles", so the leads are just as exact.
-    if (firstOfRun && job.activelyHiring && /[?&]activelyHiringForJobTitles=/.test(location.search) &&
-        cardCount <= CFG.freeAccount.maxCards) {
-      await beat(`page ${page}: LinkedIn showed only ${cardCount} people with its "Actively hiring" filter ` +
+    // The count that matters is the results list's own people: a name that is only MENTIONED inside or beside
+    // a card (mutual connection, "X is hiring") makes the page look fuller than LinkedIn's cut-off list is.
+    const cutOff = cardCount <= CFG.freeAccount.maxCards ||
+      (primaryPeople >= 1 && primaryPeople <= CFG.freeAccount.maxCards && cardCount < CFG.pacing.fullPage);
+    if (firstOfRun && job.activelyHiring && /[?&]activelyHiringForJobTitles=/.test(location.search) && cutOff) {
+      await beat(`page ${page}: LinkedIn showed only ${Math.min(cardCount, primaryPeople || cardCount)} people with its "Actively hiring" filter ` +
         '(a Premium filter: free accounts get only the first few). Searching again without it; every person ' +
         'is still checked for the #HIRING frame.');
       await api('/api/search/note', { job_id: job.jobId, note: 'filter not applied (free account)' });
