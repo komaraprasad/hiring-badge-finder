@@ -1029,6 +1029,29 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           return sendResponse({ ok: true });
         }
 
+        case 'showForReading': {  // a page drew too few people in the background: show it for a few seconds
+          // Some accounts' LinkedIn pages load their remaining results only while the page is on screen.
+          // The tab comes to the front of ITS window (the window itself is not focused or moved), and the
+          // tab that was in front is remembered so 'doneReading' puts it back.
+          if (!sender.tab) return sendResponse({ ok: false });
+          const [front] = await chrome.tabs.query({ active: true, windowId: sender.tab.windowId });
+          await updateJobs((jobs) => { if (jobs[sender.tab.id]) jobs[sender.tab.id].backTo = front && front.id !== sender.tab.id ? front.id : null; });
+          try {
+            if (sender.tab.groupId != null && sender.tab.groupId >= 0) await chrome.tabGroups.update(sender.tab.groupId, { collapsed: false });
+            await chrome.tabs.update(sender.tab.id, { active: true });
+          } catch (e) { return sendResponse({ ok: false, error: String(e && e.message || e) }); }
+          return sendResponse({ ok: true });
+        }
+
+        case 'doneReading': {     // back to the tab that was in front (usually the dashboard), group collapsed
+          const j = sender.tab && (await getJobs())[sender.tab.id];
+          try {
+            if (j && j.backTo) await chrome.tabs.update(j.backTo, { active: true });
+            if (sender.tab.groupId != null && sender.tab.groupId >= 0) await chrome.tabGroups.update(sender.tab.groupId, { collapsed: true });
+          } catch (e) { /* that tab was closed: nothing to go back to */ }
+          return sendResponse({ ok: true });
+        }
+
         case 'attention': // LinkedIn needs the person (captcha, limit, sign-in): keep the tab
           if (sender.tab) await showTab(sender.tab.id);
           return sendResponse({ ok: true });

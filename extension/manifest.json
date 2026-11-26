@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Hiring Badge Finder",
-  "version": "1.56.0",
+  "version": "1.57.0",
   "description": "Reads LinkedIn people-search results in your own browser and sends them to your Hiring Badge Finder dashboard.",
   "permissions": [
     "storage",

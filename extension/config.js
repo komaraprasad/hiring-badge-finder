@@ -114,6 +114,11 @@
     // (Short: when the tab still draws too few, the results are read from LinkedIn's page data instead.)
     render: { zoom: '0.25', scrollTries: 12, scrollGapMs: 500, extraTries: 6, patientChecks: 4 },
 
+    // A page that still has fewer people than it should after reading in the background is shown on screen
+    // for a few seconds (some accounts' LinkedIn pages load the rest only while they are on screen).
+    // assumeHidden: tests only (their headless browser reports every tab as visible).
+    visibleRead: { on: true, waitVisibleMs: 4000, assumeHidden: false },
+
     // --- Location IDs (geoUrn) --------------------------------------------
     // Built-in table. Every entry carries a "source:" comment (a test checks this). A city key
     // matches a place with no country, or one in India. Any other place: LinkedIn's location lookup

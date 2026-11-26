@@ -550,8 +550,9 @@
   }
 
   // ------------------------------------------------------- render all cards
-  async function renderAllCards(page) {
+  async function renderAllCards(page, patience) {
     const R = CFG.render;
+    const patient = R.patientChecks * (patience || 1);
     const want = expectedOnPage(page || 1);
     document.documentElement.style.zoom = R.zoom;     // smaller page = every card is on screen
     try {
@@ -560,12 +561,12 @@
       // (some accounts / browsers draw the rest of a hidden tab slowly), keep scrolling much longer.
       let last = -1;
       let steady = 0;
-      for (let i = 0; i < R.scrollTries + R.extraTries; i++) {
+      for (let i = 0; i < R.scrollTries + R.extraTries * (patience || 1); i++) {
         const cards = findCards();
         if (cards.length && cards.length === last) {
           steady += 1;
           if (steady >= 2 && cards.length >= want) break;
-          if (steady >= R.patientChecks) break;
+          if (steady >= patient) break;
           if (i >= R.scrollTries && cards.length >= want) break;
         } else {
           steady = 0;
@@ -1012,6 +1013,28 @@
         fromHtml = true;
       }
     }
+    let shown = false;
+    if (cardCount < expectedOnPage(page) && (document.visibilityState === 'hidden' || CFG.visibleRead.assumeHidden) && CFG.visibleRead.on) {
+      // Some accounts' LinkedIn pages send only the first people and load the rest only while the page is
+      // ON SCREEN (nothing loads them in a background tab). Show this tab for a few seconds, let LinkedIn
+      // load its own results, read them with the same rules, then go back to the dashboard.
+      beat(`page ${page}: LinkedIn loads the rest of this page only on screen - showing the LinkedIn tab for a few seconds`);
+      const r = await send({ type: 'showForReading' });
+      if (r && r.ok) {
+        shown = true;
+        try {
+          await waitFor(() => document.visibilityState === 'visible', CFG.visibleRead.waitVisibleMs, `page ${page}: waiting for the tab to show`);
+          await renderAllCards(page, 4);              // on screen LinkedIn loads them now: allow it a few seconds
+          const seen = readAll();
+          if (seen.cardCount > cardCount) ({ people, skipped, cardCount } = seen);
+        } finally {
+          await send({ type: 'doneReading' });
+        }
+        if (document.visibilityState === 'hidden' && cardCount < expectedOnPage(page)) {
+          beat(`page ${page}: the browser kept the tab hidden (minimised or covered window?) - keep the browser window on screen during a search`);
+        }
+      }
+    }
     const total = resultsTotal();
     const more = total != null && total > page * 10;          // LinkedIn says there are more pages
     if (fromHtml) beat(`page ${page}: the tab drew only part of the results; read all ${cardCount} from LinkedIn's page data`);
@@ -1019,7 +1042,7 @@
       // Fewer people read than LinkedIn says this page has: send the page's STRUCTURE (counts and tag
       // patterns, no names or links) to the dashboard, so the cause can be fixed without anyone running
       // anything. Also says it in the run log.
-      try { await api('/api/search/diagnostics', { job_id: job.jobId, page, data: Object.assign(await pageStructure(cardCount, total), { fromHtml, served: lastServed }) }); }
+      try { await api('/api/search/diagnostics', { job_id: job.jobId, page, data: Object.assign(await pageStructure(cardCount, total), { fromHtml, shown, served: lastServed }) }); }
       catch (e) { /* never stops the run */ }
       beat(`page ${page}: read ${cardCount} of ${expectedOnPage(page)} people LinkedIn shows` +
            (total != null ? ` (about ${total} results)` : '') + ' - page details sent for checking');

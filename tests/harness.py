@@ -284,6 +284,17 @@ const io = new IntersectionObserver((es) => {{
 }});
 io.observe(document.getElementById('more'));</script>
 </body></html>"""
+    if variant == "onscreen":
+        # The other accounts' page: the server sends 2 people, the rest load ONLY while the page is on screen.
+        # The test calls __loadRest() once it sees this tab brought to the front (test browsers are headless).
+        allc = [card_html(p) for p in people_for_page(page)]
+        return f"""<!doctype html><html><head><meta charset="utf-8"><title>Search results</title>
+<style>.sr-only{{position:absolute;left:-9999px}} figure{{margin:0;display:inline-block}} img{{width:48px;height:48px}}</style></head>
+<body><main><div data-testid="lazy-column"><div role="list" id="list">{"".join(allc[:2])}</div></div><a href="#">More</a></main>
+<script>const REST = {json.dumps(allc[2:])}; let done = false;
+window.__loadRest = () => {{ if (done) return; done = true;
+  for (const c of REST) document.getElementById('list').insertAdjacentHTML('beforeend', c); }};</script>
+</body></html>"""
     if variant == "stream":
         # LinkedIn's newer page as its server sends it: the HTML holds only the first 2 people; all 10 are in
         # the React Server Components stream inside a script (an escaped JavaScript string). The tab draws 2.
@@ -610,6 +621,7 @@ class Harness:
         self.heartbeats: list[str] = []
         self.errors: list[str] = []
         self.diagnostics: list[dict] = []
+        self.overrides: dict = {}            # served at /api/extension/config (server-delivered rules)
         self.finishes: list[str] = []
         self.geo_calls: list[dict] = []
         self.ingested: list[dict] = []          # every person exactly as the extension sent it
@@ -721,6 +733,8 @@ class Harness:
                     slug = u.path.split("/")[2]
                     ind, size, layout = outer.company_about.get(slug, ("", "", "dl"))
                     return self._send(200, company_about_page(ind, size, layout), "text/html")
+                if u.path == "/api/extension/config":
+                    return self._send(200, json.dumps({"overrides": outer.overrides}))
                 if u.path == "/api/settings":
                     return self._send(200, json.dumps(outer.storage.get_settings()))
                 if u.path == "/api/status":

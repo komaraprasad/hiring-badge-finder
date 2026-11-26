@@ -176,6 +176,7 @@ def test_two_page_run_reads_every_card_and_detects_badges(env):
     c = job
     assert (c["pages"], c["total_read"], c["saved"]) == (2, 20, 5)
     assert c["duplicates"] == 1                # person-1 appears again on page 2 (different capitalisation)
+    assert not any("showing the LinkedIn tab" in m for m in env.h.heartbeats)   # every card drawn: never shown
     assert c["not_confirmed"] == 3             # persons 4, 5 (open roles) and 6 (hiring words only), no frame
     assert c["not_hiring"] == 11
     assert c["other_locations"] == 0 and c["already_collected"] == 0
@@ -548,6 +549,34 @@ def test_results_loaded_only_when_visible_are_loaded_in_the_background_tab(env):
     assert (job["pages"], job["total_read"], job["saved"]) == (2, 20, 5)       # was (1, 2, ...)
     assert "page 1: 10 cards, 3 badges, 1 framed without open roles (skipped), 5 with open roles" in env.h.heartbeats
     assert env.h.diagnostics == []
+
+
+def test_page_loading_only_on_screen_is_shown_briefly_then_dashboard_comes_back(env):
+    """Accounts whose LinkedIn page loads the rest only while on screen: the LinkedIn tab is brought to the
+    front for a few seconds, every person is read with the same rules, and the dashboard tab is in front again."""
+    env.h.overrides = {"visibleRead": {"assumeHidden": True}}          # headless test browser: tabs never hidden
+    job_id = new_job(env)
+    env.launch(job_id, "&variant=onscreen")
+    shown_pages, end = set(), time.time() + 90
+    while time.time() < end and env.storage.get_job(job_id)["status"] == "running":
+        tabs = env.worker().evaluate("chrome.tabs.query({}).then(t => t.map(x => ({url:x.url, active:x.active})))")
+        for t in tabs:
+            if "variant=onscreen" in t["url"] and t["active"]:
+                pg = next((p for p in env.ctx.pages if p.url == t["url"]), None)
+                if pg:
+                    try:
+                        pg.evaluate("window.__loadRest && window.__loadRest()")   # what LinkedIn does on screen
+                        shown_pages.add(t["url"])
+                    except Exception:
+                        pass
+        time.sleep(0.3)
+    job = env.wait_job(job_id, timeout=30)
+    assert env.h.errors == []
+    assert len(shown_pages) == 2                                           # both pages were brought to the front
+    assert (job["pages"], job["total_read"], job["saved"]) == (2, 20, 5)   # same as a fully drawn run
+    assert any("showing the LinkedIn tab for a few seconds" in m for m in env.h.heartbeats)
+    tabs = env.worker().evaluate("chrome.tabs.query({}).then(t => t.map(x => ({url:x.url, active:x.active})))")
+    assert not any("/search/results/people" in t["url"] and t["active"] for t in tabs)   # LinkedIn tab not left in front
 
 
 def test_visibility_help_is_only_on_search_pages_and_only_while_hidden():
