@@ -1101,7 +1101,13 @@
     // a card (mutual connection, "X is hiring") makes the page look fuller than LinkedIn's cut-off list is.
     const cutOff = cardCount <= CFG.freeAccount.maxCards ||
       (primaryPeople >= 1 && primaryPeople <= CFG.freeAccount.maxCards && cardCount < CFG.pacing.fullPage);
-    if (firstOfRun && job.activelyHiring && /[?&]activelyHiringForJobTitles=/.test(location.search) && cutOff) {
+    const ahCut = firstOfRun && job.activelyHiring && /[?&]activelyHiringForJobTitles=/.test(location.search) && cutOff;
+    if (ahCut && !CFG.freeAccount.dropFilter) {                // default: the filter always stays on
+      await beat(`page ${page}: LinkedIn showed only ${Math.min(cardCount, primaryPeople || cardCount)} people with its "Actively hiring" filter ` +
+        'on this account (a Premium filter). The filter stays on; use an account where LinkedIn shows the full list for more people.');
+      await api('/api/search/note', { job_id: job.jobId, note: 'Actively hiring filter shows only a few people on this account' });
+    }
+    if (ahCut && CFG.freeAccount.dropFilter) {
       await beat(`page ${page}: LinkedIn showed only ${Math.min(cardCount, primaryPeople || cardCount)} people with its "Actively hiring" filter ` +
         '(a Premium filter: free accounts get only the first few). Searching again without it; every person ' +
         'is still checked for the #HIRING frame.');

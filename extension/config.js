@@ -118,7 +118,7 @@
     // for a few seconds (some accounts' LinkedIn pages load the rest only while they are on screen).
     // Free accounts: with LinkedIn's Premium "Actively hiring" filter, a first page of at most this many people
     // means LinkedIn cut the results off: the search is run again without the filter.
-    freeAccount: { maxCards: 3 },
+    freeAccount: { maxCards: 3, dropFilter: false },   // dropFilter: search again WITHOUT "Actively hiring" when LinkedIn cuts it short (off: the filter always stays on)
 
     // LinkedIn's AI-powered people search: top matches first and a "More" control instead of pages.
     // Clicked like a person would (same pause as between pages), at most maxClicks times per search.
