@@ -284,6 +284,20 @@ const io = new IntersectionObserver((es) => {{
 }});
 io.observe(document.getElementById('more'));</script>
 </body></html>"""
+    if variant == "aimore":
+        # LinkedIn's AI-powered people search (some accounts): 2 top matches, then a "More" button that loads
+        # 4 more each click (after a moment), no pages, no result count, no Next. Here: all 20 mock people.
+        allc = [card_html(p) for p in people_for_page(1) + people_for_page(2)]
+        return f"""<!doctype html><html><head><meta charset="utf-8"><title>Search results</title>
+<style>.sr-only{{position:absolute;left:-9999px}} figure{{margin:0;display:inline-block}} img{{width:48px;height:48px}}</style></head>
+<body><nav><a href="#">More</a></nav><main><div data-testid="lazy-column"><div role="list" id="list">{"".join(allc[:2])}</div>
+<button id="more">More</button></div></main>
+<script>const ALL = {json.dumps(allc)}; let shown = 2;
+document.getElementById('more').addEventListener('click', () => setTimeout(() => {{
+  for (const c of ALL.slice(shown, shown + 4)) document.getElementById('list').insertAdjacentHTML('beforeend', c);
+  shown += 4; if (shown >= ALL.length) document.getElementById('more').remove();
+}}, 600));</script>
+</body></html>"""
     if variant == "onscreen":
         # The other accounts' page: the server sends 2 people, the rest load ONLY while the page is on screen.
         # The test calls __loadRest() once it sees this tab brought to the front (test browsers are headless).

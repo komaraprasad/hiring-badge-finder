@@ -116,6 +116,10 @@
 
     // A page that still has fewer people than it should after reading in the background is shown on screen
     // for a few seconds (some accounts' LinkedIn pages load the rest only while they are on screen).
+    // LinkedIn's AI-powered people search: top matches first and a "More" control instead of pages.
+    // Clicked like a person would (same pause as between pages), at most maxClicks times per search.
+    loadMore: { textRegex: '^(show |see |load )?more( results| people)?$', maxClicks: 30, waitMs: 8000 },
+
     // assumeHidden: tests only (their headless browser reports every tab as visible).
     visibleRead: { on: true, waitVisibleMs: 4000, assumeHidden: false },
 

@@ -888,6 +888,50 @@
   const beat = (message) => api('/api/heartbeat', { job_id: job.jobId, message });
 
   /** Poll for a condition every 500 ms with a heartbeat every 2 s. Always ends. */
+  /** LinkedIn's "load more results" control in the results area (never the top bar's "More" menu). */
+  function findMore() {
+    const re2 = re(CFG.loadMore.textRegex);
+    return Array.from(document.querySelectorAll('main button, main a, [role="main"] button, [role="main"] a, button, a'))
+      .find((el) => !el.closest('header, nav, [role="navigation"], [role="banner"], aside, footer') &&
+        !/^(https?:\/\/(?!www\.linkedin\.com\/search\/)|\/(?!search\/|$))/.test(el.getAttribute('href') || '') &&  // a link elsewhere: not "load more"
+        re2.test(clean(el.getAttribute('aria-label') || el.textContent).slice(0, 40)) &&
+        !el.disabled && el.getAttribute('aria-disabled') !== 'true') || null;
+  }
+
+  /** The "More" design: click it, read each newly loaded batch, send only people not sent before (no double
+   *  reads), with the same pause as between pages, until the target, the end of the results or a LinkedIn
+   *  notice. */
+  async function loadMoreResults(page, sent, verdict) {
+    const L = CFG.loadMore;
+    for (let i = 1; i <= L.maxClicks; i++) {
+      const btn = findMore();
+      if (!btn) break;
+      const before = findCards().length;
+      await sleep(CFG.pacing.minWaitMs + Math.random() * (CFG.pacing.maxWaitMs - CFG.pacing.minWaitMs));
+      clickLikeAPerson(btn);
+      const grew = await waitFor(() => findCards().length > before || pageState().kind !== 'ok', L.waitMs,
+        `loading more results (${i})`);
+      const st = pageState();
+      if (st.kind === 'signin' || st.kind === 'limit') return fail(st.kind, st.text);
+      if (!grew) break;
+      await renderAllCards(page);
+      const fresh = readAll().people.filter((p) => !sent.has(p.profile_url));
+      fresh.forEach((p) => sent.add(p.profile_url));
+      if (!fresh.length) continue;
+      const badges = fresh.filter((p) => p.badge_frame).length;
+      beat(`more results ${i}: ${fresh.length} new cards, ${badges} badges`);
+      const res = await api('/api/ingest', { job_id: job.jobId, people: fresh });
+      if (!res.ok) {
+        return fail('server', `Could not reach the dashboard at ${res.url || 'its address'} (${res.error || 'status ' + res.status}). Is it running?`);
+      }
+      verdict = res.json || {};
+      beat(`more results ${i}: saved ${verdict.saved}/${verdict.target}`);
+      if (!verdict.continue) { await send({ type: 'done' }); return; }
+    }
+    await api('/api/search/finish', { job_id: job.jobId, reason: 'no more pages' });
+    await send({ type: 'done' });
+  }
+
   async function waitFor(cond, timeoutMs, label) {
     const start = Date.now();
     let n = 0;
@@ -1066,6 +1110,11 @@
     const verdict = res.json || {};
     beat(`page ${page}: saved ${verdict.saved}/${verdict.target}`);
     if (!verdict.continue) { await send({ type: 'done' }); return; }
+    // LinkedIn's AI-powered people search (rolled out account by account): the top matches first, a "More"
+    // control instead of pages. Load more the way a person does, reading each batch with the same rules.
+    if (cardCount < expectedOnPage(page) && findMore()) {
+      return loadMoreResults(page, new Set(people.map((p) => p.profile_url)), verdict);
+    }
     if (pagesDone >= maxPages) return finish('page limit reached');
     // A Next button that is there but switched off = the last page. No Next button we recognise (another
     // page design) on a full page = carry on by address; an empty next page then ends the search.

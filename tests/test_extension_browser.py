@@ -579,6 +579,21 @@ def test_page_loading_only_on_screen_is_shown_briefly_then_dashboard_comes_back(
     assert not any("/search/results/people" in t["url"] and t["active"] for t in tabs)   # LinkedIn tab not left in front
 
 
+def test_ai_search_more_button_loads_and_reads_every_result(env):
+    """LinkedIn's AI-powered people search (some accounts): 2 top matches and a "More" button, no pages.
+    More is clicked like a person would, each new batch is read with the same rules, nobody is sent twice,
+    and the top bar's own "More" menu is never clicked."""
+    job_id = new_job(env)
+    env.launch(job_id, "&variant=aimore")
+    job = env.wait_job(job_id, timeout=120)
+    assert env.h.errors == []
+    assert job["status"] == "done" and job["end_reason"] == "no more pages"
+    assert (job["total_read"], job["saved"], job["duplicates"]) == (19, 5, 0)   # 19 different people, none twice
+    assert any(m.startswith("more results 1:") for m in env.h.heartbeats)
+    names = [p["name"] for p in env.h.ingested]
+    assert len(names) == len(set(names)) == 19
+
+
 def test_visibility_help_is_only_on_search_pages_and_only_while_hidden():
     import json as _json
     m = _json.loads((EXT_SRC / "manifest.json").read_text(encoding="utf-8"))
