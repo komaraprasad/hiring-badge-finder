@@ -515,6 +515,31 @@ def test_small_listitem_box_does_not_hide_the_real_results(env):
     assert not any(p["name"].startswith("Decoy") for p in env.h.ingested)
 
 
+def test_slowly_drawn_page_is_waited_for_and_every_page_read(env):
+    """A page that draws 2 people first and the rest seconds later (hidden tab on another account):
+    the tool waits for them, and LinkedIn's "About 20 results" keeps it going without a Next button."""
+    job_id = new_job(env)
+    env.launch(job_id, "&variant=slowdraw")
+    job = env.wait_job(job_id, timeout=90)
+    assert env.h.errors == []
+    assert (job["pages"], job["total_read"]) == (2, 20)                 # was (1, 2)
+    assert env.h.diagnostics == []                                      # nothing was missing
+
+
+def test_page_drawing_too_few_people_sends_its_structure(env):
+    """Only 2 of the people LinkedIn says it has are ever drawn: the run says so in the log and sends
+    the page's structure (no names or links) to the dashboard, so nobody has to run anything."""
+    job_id = new_job(env)
+    env.launch(job_id, "&variant=twoonly")
+    job = env.wait_job(job_id, timeout=120)
+    assert env.h.errors == [] and job["pages"] == 2                      # "About 20 results": page 2 tried too
+    assert any("read 2 of 10 people LinkedIn shows (about 20 results)" in m for m in env.h.heartbeats)
+    d = env.h.diagnostics[0]
+    assert d["page"] == 1 and d["data"]["cardsRead"] == 2 and d["data"]["total"] == 20
+    sent = json.dumps(d["data"])
+    assert "Person " not in sent and "/in/" not in sent                  # structure only, no personal data
+
+
 def test_late_results_are_not_confused_with_a_sidebar(env):
     job_id = new_job(env)
     env.launch(job_id, "&variant=sidebarfirst")

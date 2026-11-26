@@ -307,6 +307,36 @@
     return { people, skipped, cardCount: cards.length };   // cardCount includes private "LinkedIn Member" cards
   }
 
+  /** The page's STRUCTURE only, for fixing a layout the tool reads badly: element names, roles,
+   *  class names and counts. No names, headlines, links or other personal text. */
+  async function pageStructure(cardCount, total) {
+    const shape = (el) => !el ? '' : [el.tagName.toLowerCase(), el.getAttribute('role') ? 'role=' + el.getAttribute('role') : '',
+      el.getAttribute('data-view-name') ? 'view=' + el.getAttribute('data-view-name') : '',
+      el.getAttribute('data-testid') ? 'testid=' + el.getAttribute('data-testid') : '',
+      clean(typeof el.className === 'string' ? el.className : '').slice(0, 80)].filter(Boolean).join(' ');
+    const people = new Set(Array.from(document.querySelectorAll(CFG.profileLink)).map(profilePath).filter(Boolean));
+    // Where the person links sit: the chain of parents above the first few (shapes only).
+    const chains = Array.from(document.querySelectorAll(CFG.profileLink)).filter((a) => profilePath(a)).slice(0, 4).map((a) => {
+      const out = [];
+      for (let el = a.parentElement, k = 0; el && el !== document.body && k < 9; el = el.parentElement, k++) out.push(shape(el));
+      return out;
+    });
+    const buttons = Array.from(document.querySelectorAll('button, a')).filter((el) =>
+      /next|page|more|show/i.test((el.getAttribute('aria-label') || '') + ' ' + clean(el.textContent).slice(0, 30)))
+      .slice(0, 12).map((el) => shape(el) + ' | ' + clean(el.getAttribute('aria-label') || el.textContent).slice(0, 30) +
+        (el.disabled || el.getAttribute('aria-disabled') === 'true' ? ' (disabled)' : ''));
+    // Nothing is requested from LinkedIn here (the page script never loads anything itself).
+    return {
+      ext: chrome.runtime.getManifest().version, visibility: document.visibilityState, total,
+      cardsRead: cardCount, peopleLinks: people.size,
+      listitems: document.querySelectorAll('[role="listitem"]').length, lis: document.querySelectorAll('li').length,
+      genericList: repeatedList(document).length, layout: lastLayout,
+      scrollHeight: document.documentElement.scrollHeight, innerHeight: window.innerHeight,
+      cardShapes: findCards().slice(0, 3).map((c) => shape(c) + ' < ' + shape(c.parentElement)),
+      chains, buttons,
+    };
+  }
+
   // -------------------------------------------------------------- page state
   function pageState() {
     const S = CFG.states;
@@ -341,20 +371,39 @@
     return !!el && !el.disabled && el.getAttribute('aria-disabled') !== 'true';
   }
 
+  /** LinkedIn's own result count ("About 1,234 results"), or null when the page does not show it. */
+  function resultsTotal() {
+    const m = clean(document.querySelector('main') ? document.querySelector('main').innerText : document.body.innerText)
+      .slice(0, 5000).match(/(?:about\s+)?([\d,.]+)\s*\+?\s+results?\b/i);
+    if (!m) return null;
+    const n = Number(m[1].replace(/[,.]/g, ''));
+    return Number.isFinite(n) ? n : null;
+  }
+
+  /** People this page should show (10, fewer on the last page), from LinkedIn's result count. */
+  function expectedOnPage(page) {
+    const total = resultsTotal();
+    return total == null ? 10 : Math.max(0, Math.min(10, total - (page - 1) * 10));
+  }
+
   // ------------------------------------------------------- render all cards
-  async function renderAllCards() {
+  async function renderAllCards(page) {
     const R = CFG.render;
+    const want = expectedOnPage(page || 1);
     document.documentElement.style.zoom = R.zoom;     // smaller page = every card is on screen
     try {
-      // Stop when the count has not grown for two checks in a row (one quiet
-      // check can just mean the page is slow to add more cards).
+      // Stop when the count has not grown for two checks in a row (one quiet check can just mean the
+      // page is slow to add more cards). While fewer cards than the page should have are drawn
+      // (some accounts / browsers draw the rest of a hidden tab slowly), keep scrolling much longer.
       let last = -1;
       let steady = 0;
-      for (let i = 0; i < R.scrollTries; i++) {
+      for (let i = 0; i < R.scrollTries + R.extraTries; i++) {
         const cards = findCards();
         if (cards.length && cards.length === last) {
           steady += 1;
-          if (steady >= 2) break;
+          if (steady >= 2 && cards.length >= want) break;
+          if (steady >= R.patientChecks) break;
+          if (i >= R.scrollTries && cards.length >= want) break;
         } else {
           steady = 0;
         }
@@ -786,8 +835,19 @@
       return finish('no more pages');
     }
 
-    await renderAllCards();
+    await renderAllCards(page);
     const { people, skipped, cardCount } = readAll();
+    const total = resultsTotal();
+    const more = total != null && total > page * 10;          // LinkedIn says there are more pages
+    if (cardCount < expectedOnPage(page)) {
+      // Fewer people read than LinkedIn says this page has: send the page's STRUCTURE (counts and tag
+      // patterns, no names or links) to the dashboard, so the cause can be fixed without anyone running
+      // anything. Also says it in the run log.
+      try { await api('/api/search/diagnostics', { job_id: job.jobId, page, data: await pageStructure(cardCount, total) }); }
+      catch (e) { /* never stops the run */ }
+      beat(`page ${page}: read ${cardCount} of ${expectedOnPage(page)} people LinkedIn shows` +
+           (total != null ? ` (about ${total} results)` : '') + ' - page details sent for checking');
+    }
     if (firstOfRun && lastLayout === 'older' && job.activelyHiring) {
       // Nothing is saved and no reads are counted: these results are not filtered to people who hire.
       return fail('layout', 'LinkedIn showed its older page for this search, which ignores the "Actively hiring" ' +
@@ -810,9 +870,11 @@
     if (pagesDone >= maxPages) return finish('page limit reached');
     // A Next button that is there but switched off = the last page. No Next button we recognise (another
     // page design) on a full page = carry on by address; an empty next page then ends the search.
+    // LinkedIn's own result count, when shown, wins: it says whether more pages exist even when this
+    // page drew only a few cards or no Next button.
     const nextBtn = findNext();
-    if (nextBtn && !nextEnabled(nextBtn)) return finish('no more pages');
-    if (!nextBtn && cardCount < CFG.pacing.fullPage) return finish('no more pages');
+    if (!more && nextBtn && !nextEnabled(nextBtn)) return finish('no more pages');
+    if (!more && !nextBtn && cardCount < CFG.pacing.fullPage) return finish('no more pages');
 
     // Random 4-8 s pause, then the next page. Done by the background worker: this hidden tab may be
     // frozen by the browser at any moment, and must not be the one waiting.

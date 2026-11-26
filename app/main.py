@@ -395,6 +395,32 @@ def add_note(body: NoteBody):
     return {"ok": True}
 
 
+class DiagnosticsBody(BaseModel):
+    job_id: str
+    page: int = Field(1, ge=1, le=100)
+    data: dict = Field(default_factory=dict)
+
+
+# Page-structure reports from runs that read fewer people than LinkedIn showed (newest last, in memory).
+# Only element names, roles, class names and counts: the extension sends no names or links.
+DIAGNOSTICS: list[dict] = []
+
+
+@app.post("/api/search/diagnostics")
+def add_diagnostics(body: DiagnosticsBody):
+    job = _job_or_404(body.job_id)
+    text = json.dumps(body.data, default=str)[:8000]
+    DIAGNOSTICS.append({"job_id": body.job_id, "page": body.page, "at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                        "locations": job.get("locations"), "data": json.loads(text) if len(text) < 8000 else text})
+    del DIAGNOSTICS[:-50]
+    return {"ok": True}
+
+
+@app.get("/api/diagnostics")
+def list_diagnostics():
+    return DIAGNOSTICS[-50:]
+
+
 @app.post("/api/heartbeat")
 def heartbeat(body: HeartbeatBody):
     job = db().get_job(body.job_id)

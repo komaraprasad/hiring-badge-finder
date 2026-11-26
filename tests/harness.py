@@ -196,6 +196,17 @@ def results_page(page: int, variant: str = "") -> str:
                 "<style>.sr-only{position:absolute;left:-9999px} img{width:48px;height:48px}</style></head>"
                 f"<body><main><section>{decoys}</section><div><div>{items}</div></div>"
                 "<nav><span>1</span><span>2</span></nav></main></body></html>")
+    if variant in ("slowdraw", "twoonly"):
+        # Another account / browser: the page says "About 20 results" but draws only 2 people at first.
+        # slowdraw: the other 8 appear after 4 s. twoonly: they never appear. No Next button the tool knows.
+        cards = [card_html(p) for p in people_for_page(page)]
+        later = "setTimeout(() => { for (const c of ALL.slice(2)) list.insertAdjacentHTML('beforeend', c); }, 4000);" \
+            if variant == "slowdraw" else ""
+        return f"""<!doctype html><html><head><meta charset="utf-8"><title>Search results</title>
+<style>.sr-only{{position:absolute;left:-9999px}} figure{{margin:0;display:inline-block}} img{{width:48px;height:48px}}</style></head>
+<body><main><div>About 20 results</div><div role="list" id="list"></div></main>
+<script>const ALL = {json.dumps(cards)}; const list = document.getElementById('list');
+for (const c of ALL.slice(0, 2)) list.insertAdjacentHTML('beforeend', c); {later}</script></body></html>"""
     if variant == "sidebarfirst":   # the newer layout's cards arrive late; a sidebar is already there
         page_html = results_page(page, "")
         return page_html.replace("<body>", "<body>" + sidebar, 1).replace(
@@ -491,6 +502,7 @@ class Harness:
         self.storage = storage
         self.heartbeats: list[str] = []
         self.errors: list[str] = []
+        self.diagnostics: list[dict] = []
         self.finishes: list[str] = []
         self.geo_calls: list[dict] = []
         self.ingested: list[dict] = []          # every person exactly as the extension sent it
@@ -632,6 +644,9 @@ class Harness:
                         return self._send(200, json.dumps({"ok": st.rewind_job(body["job_id"])}))
                     if u.path == "/api/search/note":
                         outer.notes.append(body)
+                        return self._send(200, '{"ok":true}')
+                    if u.path == "/api/search/diagnostics":
+                        outer.diagnostics.append(body)
                         return self._send(200, '{"ok":true}')
                     if u.path == "/api/companies":
                         outer.companies.append(body)

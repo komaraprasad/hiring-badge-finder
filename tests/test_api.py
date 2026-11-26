@@ -299,6 +299,14 @@ def test_continue_is_kept_per_browser(client):
     assert client.post("/api/search/start", json=body, headers=me).json()["start_page"] == 2
 
 
+def test_page_structure_reports_are_kept_for_checking(client):
+    j = start(client).json()
+    data = {"cardsRead": 2, "peopleLinks": 10, "listitems": 2, "buttons": ["button | Next"]}
+    assert client.post("/api/search/diagnostics", json={"job_id": j["job_id"], "page": 1, "data": data}).json()["ok"]
+    got = client.get("/api/diagnostics").json()[-1]
+    assert got["job_id"] == j["job_id"] and got["data"] == data and got["page"] == 1
+
+
 def test_rewind_endpoint(client):
     j = start(client).json()["job_id"]
     assert client.post("/api/search/rewind", json={"job_id": j}).json()["ok"] is True

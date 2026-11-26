@@ -109,7 +109,9 @@
     },
 
     // --- Rendering all cards on a page -----------------------------------
-    render: { zoom: '0.25', scrollTries: 12, scrollGapMs: 500 },
+    // patientChecks / extraTries: when fewer cards are drawn than the page should have, keep scrolling
+    // (up to about 10 s more) before reading, instead of stopping after 1 s without new cards.
+    render: { zoom: '0.25', scrollTries: 12, scrollGapMs: 500, extraTries: 20, patientChecks: 12 },
 
     // --- Location IDs (geoUrn) --------------------------------------------
     // Built-in table. Every entry carries a "source:" comment (a test checks this). A city key
