@@ -579,6 +579,20 @@ def test_page_loading_only_on_screen_is_shown_briefly_then_dashboard_comes_back(
     assert not any("/search/results/people" in t["url"] and t["active"] for t in tabs)   # LinkedIn tab not left in front
 
 
+def test_ai_search_card_design_reads_every_person_not_their_card_parts(env):
+    """The failing account's page with the tab on screen: people are <section>s and the page's listitems are
+    9 parts inside ONE person's card. Every person is read (was 1), mutual-connection avatars are not."""
+    job_id = new_job(env)
+    env.launch(job_id, "&variant=aicards")
+    job = env.wait_job(job_id, timeout=90)
+    assert env.h.errors == []
+    assert (job["pages"], job["total_read"], job["saved"]) == (2, 20, 5)
+    names = {p["name"] for p in env.h.ingested}
+    assert not any(n.lower().startswith("mutual") or n == "Me" for n in names)
+    p1 = next(p for p in env.h.ingested if p["name"] == "Person 1")
+    assert p1["headline"] == "Senior Engineering Manager - Hiring SDETs for my team" and p1["badge_frame"] is True
+
+
 def test_ai_search_more_button_loads_and_reads_every_result(env):
     """LinkedIn's AI-powered people search (some accounts): 2 top matches and a "More" button, no pages.
     More is clicked like a person would, each new batch is read with the same rules, nobody is sent twice,

@@ -104,6 +104,36 @@
   let lastLayout = 'current';
 
   /** Find one container element per person. */
+  /** Different people among cards (by each card's first person link). */
+  const peopleIn = (els) => new Set(els.map((c) => Array.from(c.querySelectorAll(CFG.profileLink))
+    .map(profilePath).find(Boolean)).filter(Boolean)).size;
+
+  /** Layout-free cards: for every person whose NAME is a link (photo-only links, e.g. mutual connections,
+   *  are not people of their own), the largest block around it that holds no other person. Works on any
+   *  page design, whatever wraps a result. */
+  function climbCards(rootEl, namedOnly) {
+    const cards = new Map(); // element -> profile path
+    rootEl.querySelectorAll(CFG.profileLink).forEach((a) => {
+      const p = profilePath(a);
+      if (!p || a.closest('header, nav, [role="navigation"], [role="banner"], aside, footer')) return;
+      if (namedOnly && !clean(cardText(a))) return;
+      let el = a;
+      while (el.parentElement && el.parentElement !== document.body && el.parentElement !== rootEl &&
+             distinctProfiles(el.parentElement).size <= 1) {
+        el = el.parentElement;
+      }
+      if (!cards.has(el)) cards.set(el, p);
+    });
+    // one card per person (keeps the largest container when two overlap)
+    const byPerson = new Map();
+    cards.forEach((p, el) => {
+      const prev = byPerson.get(p);
+      if (!prev || el.contains(prev)) byPerson.set(p, el);
+    });
+    return Array.from(byPerson.values());
+  }
+
+  /** Find one container element per person. */
   function findCards(rootEl) {
     rootEl = rootEl || document;
     if (CFG.cardSelector) {
@@ -116,13 +146,18 @@
       };
       const cards = pick(CFG.cardSelector, false);
       lastLayout = 'current';
-      // A few listitems may be some other block on the page (e.g. a highlighted box of 2 people) while the
-      // real results list is drawn differently for this account: when the layout-free finder sees MORE
-      // different people, it is the results list. (Seen: one account read 2 people while LinkedIn showed 10.)
-      if (cards.length && cards.length < 8) {
-        const people = (els) => new Set(els.map((c) => Array.from(c.querySelectorAll(CFG.profileLink)).map(profilePath).find(Boolean)).filter(Boolean)).size;
-        const generic = repeatedList(rootEl);
-        if (people(generic) > people(cards)) return generic;
+      // Fewer than a page of different people from the usual markers: the results may be drawn another way
+      // for this account (seen: a box of 2 people; and LinkedIn's AI search, whose listitems are small parts
+      // INSIDE one person's card). Then the finder that sees the MOST different people is the results list.
+      if (cards.length && peopleIn(cards) < CFG.pacing.fullPage) {
+        // A real repeated results list with a full page of people wins; the link-based cards only when
+        // nothing else finds enough (they would also take people from small boxes beside the results).
+        const list = repeatedList(rootEl);
+        if (peopleIn(list) >= CFG.pacing.fullPage && peopleIn(list) > peopleIn(cards)) return list;
+        let best = peopleIn(list) > peopleIn(cards) ? list : cards;
+        const climbed = climbCards(rootEl, true);
+        if (peopleIn(climbed) > peopleIn(best)) best = climbed;
+        if (best !== cards) return best;
       }
       if (cards.length) return cards;
       lastLayout = 'older';             // whatever is found below is LinkedIn's older page design
@@ -133,23 +168,7 @@
       }
       return repeatedList(rootEl);
     }
-    const cards = new Map(); // element -> profile path
-    rootEl.querySelectorAll(CFG.profileLink).forEach((a) => {
-      const p = profilePath(a);
-      if (!p) return;
-      let el = a;
-      while (el.parentElement && el.parentElement !== document.body && distinctProfiles(el.parentElement).size <= 1) {
-        el = el.parentElement;
-      }
-      if (!cards.has(el)) cards.set(el, p);
-    });
-    // one card per person (keeps the largest container when two overlap)
-    const byPerson = new Map();
-    cards.forEach((p, el) => {
-      const prev = byPerson.get(p);
-      if (!prev || el.contains(prev)) byPerson.set(p, el);
-    });
-    return Array.from(byPerson.values());
+    return climbCards(rootEl, false);
   }
 
   function firstText(card, selectors) {

@@ -284,6 +284,18 @@ const io = new IntersectionObserver((es) => {{
 }});
 io.observe(document.getElementById('more'));</script>
 </body></html>"""
+    if variant == "aicards":
+        # LinkedIn's AI search card design (seen on a failing account): each person is a <section> (no
+        # role="listitem"); the page's role="listitem" elements are small parts INSIDE one person's card
+        # (9 skill chips linking to that person's own skills page). No Next, no count.
+        cards = [card_html(p).replace('<div role="listitem">', "<section>", 1).replace("</div></div>", "</div></section>", 1)
+                 for p in people_for_page(page)]
+        chips = "".join(f'<div role="listitem"><a href="/in/person-{(page - 1) * 10 + 1}/details/skills/">Skill {i}</a></div>'
+                        for i in range(9))
+        cards[0] = cards[0].replace("</section>", f"<div>{chips}</div></section>", 1)
+        return f"""<!doctype html><html><head><meta charset="utf-8"><title>Search results</title>
+<style>.sr-only{{position:absolute;left:-9999px}} figure{{margin:0;display:inline-block}} img{{width:48px;height:48px}}</style></head>
+<body><nav><a href="/in/me/">Me</a></nav><main><div data-testid="lazy-column"><div>{"".join(cards)}</div></div></main></body></html>"""
     if variant == "aimore":
         # LinkedIn's AI-powered people search (some accounts): 2 top matches, then a "More" button that loads
         # 4 more each click (after a moment), no pages, no result count, no Next. Here: all 20 mock people.
