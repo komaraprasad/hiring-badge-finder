@@ -116,6 +116,10 @@
 
     // A page that still has fewer people than it should after reading in the background is shown on screen
     // for a few seconds (some accounts' LinkedIn pages load the rest only while they are on screen).
+    // Free accounts: with LinkedIn's Premium "Actively hiring" filter, a first page of at most this many people
+    // means LinkedIn cut the results off: the search is run again without the filter.
+    freeAccount: { maxCards: 3 },
+
     // LinkedIn's AI-powered people search: top matches first and a "More" control instead of pages.
     // Clicked like a person would (same pause as between pages), at most maxClicks times per search.
     loadMore: { textRegex: '^(show |see |load )?more( results| people)?$', maxClicks: 30, waitMs: 8000 },

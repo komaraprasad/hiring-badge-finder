@@ -1,4 +1,4 @@
-# Hiring Badge Finder: complete workflow (version 1.60.0)
+# Hiring Badge Finder: complete workflow (version 1.61.0)
 
 > **1.50.0:** Step 5 (Company Industry / Size and Hiring For) is ON and runs WHILE the search runs. Its main way
 > is "fast details": each lead's profile data from LinkedIn's internal profile API (see step 5); the page-based

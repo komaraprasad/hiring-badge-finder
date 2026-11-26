@@ -1018,6 +1018,22 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           return;
         }
 
+        case 'dropActivelyHiring': { // free account: LinkedIn shows only a few people with this Premium filter
+          const jobs = await getJobs();
+          if (!sender.tab || !jobs[sender.tab.id]) return sendResponse({ ok: false, error: 'not a search tab' });
+          const u = new URL(sender.tab.url);
+          if (!u.searchParams.has('activelyHiringForJobTitles')) return sendResponse({ ok: false, error: 'filter not on' });
+          u.searchParams.delete('activelyHiringForJobTitles');
+          u.searchParams.delete('page');
+          // Same as the server builds a search without the filter: the word "hiring" is required instead
+          const kw = u.searchParams.get('keywords') || '';
+          if (!/hiring/i.test(kw)) u.searchParams.set('keywords', kw ? kw + ' AND hiring' : 'hiring');
+          if (!u.href.startsWith(SEARCH_PREFIX)) return sendResponse({ ok: false, error: 'not a search page' });
+          await updateJobs((js) => { if (js[sender.tab.id]) js[sender.tab.id].activelyHiring = false; });
+          await chrome.tabs.update(sender.tab.id, { url: u.href });
+          return sendResponse({ ok: true });
+        }
+
         case 'restartAtPageOne': { // continued page was empty: same search, page 1, same tab
           const jobs = await getJobs();
           if (!sender.tab || !jobs[sender.tab.id]) return sendResponse({ ok: false, error: 'not a search tab' });

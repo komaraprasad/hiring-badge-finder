@@ -737,6 +737,12 @@ class Harness:
                     self.send_header("Content-Length", "0")
                     self.end_headers()
                     return
+                if u.path.startswith("/search/results/people") and "freeah" in q                         and "activelyHiringForJobTitles" in q:
+                    # a free account: with the Premium "Actively hiring" filter LinkedIn shows only 2 people
+                    outer.search_loads.append(u.path + "?" + u.query)
+                    two = "".join(card_html(p) for p in people_for_page(1)[:2])
+                    return self._send(200, "<!doctype html><title>Search</title><main><div role='list'>" + two +
+                                      "</div><p>Upgrade to Premium to see more</p></main>", "text/html")
                 if u.path.startswith("/search/results/people"):
                     outer.search_loads.append(u.path + "?" + u.query)
                     outer.order.append("search:" + q.get("page", ["1"])[0])

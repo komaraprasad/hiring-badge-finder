@@ -579,6 +579,22 @@ def test_page_loading_only_on_screen_is_shown_briefly_then_dashboard_comes_back(
     assert not any("/search/results/people" in t["url"] and t["active"] for t in tabs)   # LinkedIn tab not left in front
 
 
+def test_free_account_actively_hiring_cutoff_searches_again_without_the_filter(env):
+    """A free account: with LinkedIn's Premium "Actively hiring" filter only 2 people are shown. The same
+    search runs again without the filter (no read counted for the cut-off page) and every page is read,
+    each person still checked for the frame."""
+    job_id = new_job(env)
+    env.launch(job_id, "&freeah=1&activelyHiringForJobTitles=%5B%22-100%22%5D")
+    job = env.wait_job(job_id, timeout=90)
+    assert env.h.errors == []
+    assert (job["pages"], job["total_read"], job["saved"]) == (2, 20, 5)       # was (1, 2, ...)
+    assert any("Searching again without it" in m for m in env.h.heartbeats)
+    assert any(n.get("note") == "filter not applied (free account)" for n in env.h.notes)
+    later = [u for u in env.h.search_loads[1:]]
+    assert later and not any("activelyHiringForJobTitles" in u for u in later)  # every later page: no filter
+    assert "hiring" in later[0]                                                   # the word "hiring" required instead
+
+
 def test_results_in_their_own_scrolling_box_are_loaded_by_scrolling_it(env):
     """The failing accounts' page is one window tall; its results are in their own scrolling box and more
     people load only when that box is scrolled. The box is scrolled like a mouse wheel would: every page read."""

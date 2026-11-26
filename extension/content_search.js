@@ -1086,6 +1086,19 @@
 
     await renderAllCards(page);
     let { people, skipped, cardCount } = readAll();
+    // Free accounts: LinkedIn's "Actively hiring" filter is a Premium filter, and on a free account LinkedIn
+    // shows only the first 2-3 people with it (the rest are kept for Premium). Seen on every free account
+    // tested (Nov 2026). Search again WITHOUT the filter, in this tab, before any read is counted: every
+    // person is still checked for the #HIRING frame and "See open roles", so the leads are just as exact.
+    if (firstOfRun && job.activelyHiring && /[?&]activelyHiringForJobTitles=/.test(location.search) &&
+        cardCount <= CFG.freeAccount.maxCards) {
+      await beat(`page ${page}: LinkedIn showed only ${cardCount} people with its "Actively hiring" filter ` +
+        '(a Premium filter: free accounts get only the first few). Searching again without it; every person ' +
+        'is still checked for the #HIRING frame.');
+      await api('/api/search/note', { job_id: job.jobId, note: 'filter not applied (free account)' });
+      const r = await send({ type: 'dropActivelyHiring' });
+      if (r && r.ok) return;                                   // this tab now loads the search without the filter
+    }
     let fromHtml = false;
     if (cardCount < expectedOnPage(page)) {
       // The tab drew fewer people than the page holds (LinkedIn's newer page draws the rest only when they
