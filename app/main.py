@@ -761,6 +761,21 @@ def extension_info():
     return {"version": _ext_version()}
 
 
+EXT_OVERRIDES = Path(__file__).resolve().parent / "extension_config.json"
+
+
+@app.get("/api/extension/config")
+def extension_config():
+    """Marker / rule updates every installed extension applies at its next search (app/extension_config.json),
+    so a LinkedIn change is fixed here with no new download. Data only; never code."""
+    try:
+        data = json.loads(EXT_OVERRIDES.read_text(encoding="utf-8"))
+        over = data.get("overrides") if isinstance(data, dict) else None
+    except (OSError, ValueError):
+        over = None
+    return {"overrides": over if isinstance(over, dict) else {}}
+
+
 LOCAL_SERVER = "http://localhost:8000"
 
 

@@ -299,6 +299,17 @@ def test_continue_is_kept_per_browser(client):
     assert client.post("/api/search/start", json=body, headers=me).json()["start_page"] == 2
 
 
+def test_extension_config_overrides_are_served(client, tmp_path, monkeypatch):
+    import app.main
+    assert client.get("/api/extension/config").json() == {"overrides": {}}          # the repo file: nothing yet
+    f = tmp_path / "over.json"
+    f.write_text('{"overrides": {"next": {"textRegex": "^suivant$"}}}', encoding="utf-8")
+    monkeypatch.setattr(app.main, "EXT_OVERRIDES", f)
+    assert client.get("/api/extension/config").json() == {"overrides": {"next": {"textRegex": "^suivant$"}}}
+    f.write_text("not json", encoding="utf-8")                                       # a broken file never breaks searches
+    assert client.get("/api/extension/config").json() == {"overrides": {}}
+
+
 def test_page_structure_reports_are_kept_for_checking(client):
     j = start(client).json()
     data = {"cardsRead": 2, "peopleLinks": 10, "listitems": 2, "buttons": ["button | Next"]}

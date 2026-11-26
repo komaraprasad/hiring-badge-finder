@@ -197,4 +197,24 @@
     // Timeouts (every wait has one, so nothing hangs)
     timeouts: { messageMs: 20000, cardsMs: 20000, pageChangeMs: 20000 },
   };
+
+  /** Markers and rules sent by the dashboard server (GET /api/extension/config) replace the values above,
+   *  so a LinkedIn change is fixed on the server and reaches every user at their next search, with no
+   *  new download. DATA only (text, numbers, true/false, lists): nothing in it is ever run as code.
+   *  Changed in place, so every part of the extension that holds HBF_CONFIG sees the new values. */
+  root.HBF_APPLY_OVERRIDES = function apply(over, target) {
+    target = target || root.HBF_CONFIG;
+    if (!over || typeof over !== 'object' || Array.isArray(over)) return;
+    for (const [k, v] of Object.entries(over)) {
+      if (k === '__proto__' || k === 'constructor' || k === 'prototype') continue;
+      const ok = (x) => x === null || ['string', 'number', 'boolean'].includes(typeof x) ||
+        (Array.isArray(x) && x.every((y) => ['string', 'number', 'boolean'].includes(typeof y)));
+      if (v && typeof v === 'object' && !Array.isArray(v)) {
+        if (!target[k] || typeof target[k] !== 'object' || Array.isArray(target[k])) target[k] = {};
+        apply(v, target[k]);
+      } else if (ok(v)) {
+        target[k] = v;
+      }
+    }
+  };
 })(typeof self !== 'undefined' ? self : window);

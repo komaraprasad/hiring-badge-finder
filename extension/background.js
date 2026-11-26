@@ -18,6 +18,21 @@ const MAX_SLEEP_MS = 60000;
 // ---------------------------------------------------------------- storage
 /** The Options-page address, or the default. Only a fallback: a search launched from a dashboard
  *  talks to that dashboard's own address (see dashboardOrigin), whatever port it runs on. */
+/** Marker / rule updates from the dashboard server (see HBF_APPLY_OVERRIDES in config.js), kept for
+ *  2 minutes. Also applied to this worker's own copy. {} when the server has none or cannot be reached. */
+const overridesCache = { at: 0, server: '', cfg: {} };
+async function serverOverrides(server) {
+  if (overridesCache.server === server && Date.now() - overridesCache.at < 120000) return overridesCache.cfg;
+  let cfg = {};
+  try {
+    const r = await callServerOnce('/api/extension/config', 'GET', null, server);
+    if (r.ok && r.json && r.json.overrides && typeof r.json.overrides === 'object') cfg = r.json.overrides;
+  } catch (e) { /* the built-in markers are used */ }
+  Object.assign(overridesCache, { at: Date.now(), server, cfg });
+  try { self.HBF_APPLY_OVERRIDES(cfg); } catch (e) { /* ignore a bad update */ }
+  return cfg;
+}
+
 async function getServerUrl() {
   const { serverUrl } = await chrome.storage.sync.get('serverUrl');
   return (serverUrl || DEFAULT_SERVER).replace(/\/+$/, '');
@@ -932,9 +947,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             const { lastOpenAt } = await chrome.storage.session.get('lastOpenAt');
             return sendResponse({ ok: false, pending: !!lastOpenAt && Date.now() - lastOpenAt < 10000 });
           }
+          const server = j.serverUrl || await getServerUrl();
           return sendResponse({ ok: true, jobId: j.jobId, activelyHiring: !!j.activelyHiring,
-                                serverUrl: j.serverUrl || await getServerUrl(),
-                                browserId: await getBrowserId() });
+                                serverUrl: server, browserId: await getBrowserId(),
+                                cfg: await serverOverrides(server) });
         }
 
         case 'sleep': {   // timers in hidden tabs are throttled; the worker's are not

@@ -535,6 +535,28 @@ def test_results_the_tab_never_draws_are_read_from_linkedins_page_data(env):
     assert got["Person 9"]["badge_frame"] is False                         # its mutual's framed avatar doesn't count
 
 
+def test_results_only_in_the_react_stream_are_rebuilt_and_read(env):
+    """LinkedIn's newer page (any account): the HTML holds 2 people, the other 8 exist only in the page's
+    React Server Components stream. The page is rebuilt from the stream and read with the same rules:
+    same counts, fields and badges as a fully drawn run."""
+    job_id = new_job(env)
+    env.launch(job_id, "&variant=stream")
+    job = env.wait_job(job_id, timeout=90)
+    assert env.h.errors == []
+    assert (job["pages"], job["total_read"], job["saved"]) == (2, 20, 5)       # the same as a fully drawn run
+    hb = env.h.heartbeats
+    assert "page 1: 10 cards, 3 badges, 1 framed without open roles (skipped), 5 with open roles" in hb
+    got = {p["name"]: p for p in env.h.ingested}
+    assert {"Person 3", "Person 10", "Person 13", "Person 19"} <= set(got)  # people only in the stream, both pages
+    p1 = got["Person 1"]
+    assert p1["headline"] == "Senior Engineering Manager - Hiring SDETs for my team"
+    assert p1["location"] == "Bengaluru, Karnataka, India" and p1["degree"] == "3rd+"
+    assert p1["profile_url"] == "https://www.linkedin.com/in/person-1"
+    assert p1["badge_frame"] is True and p1["open_roles"] is True
+    assert got["Person 9"]["badge_frame"] is False                         # its mutual's framed avatar doesn't count
+    assert env.h.diagnostics == []                                         # nothing was missing
+
+
 def test_slowly_drawn_page_is_waited_for_and_every_page_read(env):
     """A page that draws 2 people first and the rest seconds later (hidden tab on another account):
     the tool waits for them, and LinkedIn's "About 20 results" keeps it going without a Next button."""

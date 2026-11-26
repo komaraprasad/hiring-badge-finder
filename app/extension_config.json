@@ -1,0 +1,4 @@
+{
+  "_about": "Marker / rule updates for every installed extension (merged over extension/config.js at each search). DATA only. Leave overrides empty to use the built-in values.",
+  "overrides": {}
+}

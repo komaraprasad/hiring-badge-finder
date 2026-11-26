@@ -64,7 +64,7 @@
   // '/in/<slug>' only: '/in/ann/opportunities/hiring-opportunities/' -> '/in/ann'.
   function profilePath(a) {
     try {
-      const m = new URL(a.href, location.href).pathname.match(/^\/in\/([^/]+)/i);
+      const m = new URL(a.getAttribute('href') || a.href, location.href).pathname.match(/^\/in\/([^/]+)/i);
       return m ? '/in/' + m[1].toLowerCase() : '';
     } catch (e) { return ''; }
   }
@@ -324,21 +324,148 @@
   /** People to send, plus how many framed photos were skipped for having no hiring link. */
   function readAll(rootEl) {
     const cards = findCards(rootEl);
-    const people = cards.map(readCard).filter((p) => p.profile_url);
+    const once = new Set();
+    const people = cards.map(readCard).filter((p) => p.profile_url && !once.has(p.profile_url) && once.add(p.profile_url));
     const skipped = people.filter((p) => p.framed_skipped).length;
     people.forEach((p) => { delete p.framed_skipped; });
     return { people, skipped, cardCount: cards.length };   // cardCount includes private "LinkedIn Member" cards
   }
 
+  // ------------------------------------------- LinkedIn's page data (React Server Components stream)
+  // LinkedIn's newer pages are built with React Server Components: the server sends the page as React's own
+  // standard stream of rows ("1fb:["$","div",null,{...props, children}]"), and the browser draws it. A
+  // background tab draws only part of it, but the stream holds the whole page. It is turned back into the
+  // page here, exactly as the browser would draw it, and read with the SAME card rules as a drawn page.
+  // Nothing below depends on LinkedIn's markup, only on React's stream format, so LinkedIn's redesigns
+  // change this rebuilt page just as they change the drawn page.
+  const REF_RE = /^\$[L@]?([0-9a-fA-F]{1,8})$/;
+
+  /** The stream text inside the page's scripts (raw, and inside escaped JavaScript strings). */
+  function streamTexts(doc) {
+    const texts = [];
+    for (const s of doc.querySelectorAll('script')) {
+      const t = s.textContent || '';
+      if (t.includes('["$"')) texts.push(t);
+      if (!t.includes('\\"$\\"')) continue;
+      for (const m of t.matchAll(/"((?:[^"\\]|\\[\s\S])*)"/g)) {
+        if (m[1].length > 20 && m[1].includes('\\"$\\"')) { try { texts.push(JSON.parse('"' + m[1] + '"')); } catch (e) { /* not a string */ } }
+      }
+    }
+    return texts;
+  }
+
+  /** Stream rows by id: "<hex id>:<JSON>" (module, text and hint rows are skipped). */
+  function streamRows(texts) {
+    const rows = new Map();
+    for (const t of texts) {
+      const starts = Array.from(t.matchAll(/(?:^|\n)([0-9a-fA-F]{1,8}):(?=[[{])/g));
+      starts.forEach((m, i) => {
+        const id = m[1];
+        if (rows.has(id)) return;
+        const from = m.index + m[0].length;
+        let body = t.slice(from, i + 1 < starts.length ? starts[i + 1].index : t.length).trim();
+        try { rows.set(id, JSON.parse(body)); return; } catch (e) { /* trailing text: trim below */ }
+        body = body.slice(0, body.lastIndexOf(body[0] === '[' ? ']' : '}') + 1);
+        try { rows.set(id, JSON.parse(body)); } catch (e) { /* not a JSON row */ }
+      });
+    }
+    return rows;
+  }
+
+  const TAG_OK = /^[a-z][a-z0-9]*$/;
+  const ATTR_OK = /^(href|role|alt|src|srcset|id|title|class|aria-[a-z-]+|data-[a-z0-9-]+)$/;
+  const isElement = (v) => Array.isArray(v) && v[0] === '$' && typeof v[1] === 'string';
+
+  /** The stream turned into elements (inside a box that is never shown). */
+  function buildFromStream(rows, doc) {
+    const referenced = new Set();
+    const scan = (v, d) => {
+      if (v == null || d > 200) return;
+      if (typeof v === 'string') { const m = v.match(REF_RE); if (m) referenced.add(m[1]); return; }
+      if (typeof v === 'object') for (const x of Object.values(v)) scan(x, d + 1);
+    };
+    rows.forEach((v) => scan(v, 0));
+    const box = doc.createElement('div');
+    let budget = 300000;                                      // never runs away on a huge page
+    const imageOf = (props) => {                              // LinkedIn's image component: { rootUrl, imageRenditions }
+      const seen = [props];
+      for (let i = 0; i < seen.length && i < 40; i++) {
+        const o = seen[i];
+        if (o && typeof o.rootUrl === 'string') {
+          const r = Array.isArray(o.imageRenditions) && o.imageRenditions[0];
+          return o.rootUrl + (r && typeof r.suffixUrl === 'string' ? r.suffixUrl : '');
+        }
+        if (o && typeof o === 'object' && !isElement(o)) for (const x of Object.values(o)) if (x && typeof x === 'object') seen.push(x);
+      }
+      return '';
+    };
+    const build = (v, parent, depth, path) => {
+      if (--budget < 0 || depth > 120 || v == null || typeof v === 'boolean') return;
+      if (typeof v === 'number') { parent.appendChild(doc.createTextNode(String(v))); return; }
+      if (typeof v === 'string') {
+        const m = v.match(REF_RE);
+        if (m) { if (!path.has(m[1]) && rows.has(m[1])) build(rows.get(m[1]), parent, depth + 1, new Set(path).add(m[1])); return; }
+        if (/^\$[A-Za-z]/.test(v) && v.length < 16) return;                       // other stream markers ($undefined ...)
+        parent.appendChild(doc.createTextNode(v.startsWith('$$') ? v.slice(1) : v));
+        return;
+      }
+      if (!Array.isArray(v)) { if (typeof v === 'object' && 'children' in v) build(v.children, parent, depth + 1, path); return; }
+      if (!isElement(v)) { v.forEach((x) => build(x, parent, depth + 1, path)); return; }
+      const type = v[1];
+      const props = v[3] && typeof v[3] === 'object' && !Array.isArray(v[3]) ? v[3] : {};
+      const html = TAG_OK.test(type);
+      // A component is drawn as what it contains; one with an address is a link.
+      const el = doc.createElement(html ? type : (typeof props.href === 'string' ? 'a' : 'div'));
+      for (const [k, val] of Object.entries(props)) {
+        if (typeof val !== 'string' && typeof val !== 'number') continue;
+        const name = k === 'className' ? 'class' : k;
+        if (ATTR_OK.test(name) && !/^\s*javascript:/i.test(String(val))) { try { el.setAttribute(name, String(val)); } catch (e) { /* bad name */ } }
+      }
+      if (!html) {
+        const src = imageOf(props);
+        if (src) { const f = doc.createElement('figure'); const img = doc.createElement('img'); img.setAttribute('src', src); f.appendChild(img); el.appendChild(f); }
+        // a component's other element-valued props (slots such as title / subtitle) are part of what it draws
+        for (const [k, val] of Object.entries(props)) {
+          if (k === 'children' || val == null || typeof val !== 'object' && !(typeof val === 'string' && REF_RE.test(val))) continue;
+          if (isElement(val) || (Array.isArray(val) && val.some((x) => isElement(x) || (typeof x === 'string' && REF_RE.test(x)))) ||
+              (typeof val === 'string' && REF_RE.test(val))) build(val, el, depth + 1, path);
+        }
+      }
+      if ('children' in props) build(props.children, el, depth + 1, path);
+      parent.appendChild(el);
+    };
+    rows.forEach((v, id) => { if (!referenced.has(id) && isElement(v)) build(v, box, 0, new Set([id])); });
+    return box;
+  }
+
+  let lastServed = null;          // what the served page gave (counts only), for the page report
+
   /** This results page exactly as LinkedIn's server sends it (one request for the same address, with the
-   *  person's own session), read with the same card rules. null when it cannot be read. */
-  async function readServedPage() {
+   *  person's own session), read with the same card rules: first its HTML, then its React stream.
+   *  null when it cannot be read. */
+  async function readServedPage(page) {
+    lastServed = { status: 'not read' };
     try {
       const res = await fetch(location.href, { credentials: 'include', headers: { accept: 'text/html,application/xhtml+xml' } });
-      if (!res.ok || !/\/search\/results\/people/.test(res.url)) return null;      // redirected (sign-in, check): not results
+      if (!res.ok || !/\/search\/results\/people/.test(res.url)) {                // redirected (sign-in, check): not results
+        lastServed = { status: 'http ' + res.status };
+        return null;
+      }
       const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
-      return readAll(doc);
+      let best = readAll(doc);
+      lastServed = { status: 'ok', htmlCards: best.cardCount, streamRows: 0, streamCards: 0 };
+      if (best.cardCount < expectedOnPage(page)) {
+        const rows = streamRows(streamTexts(doc));
+        lastServed.streamRows = rows.size;
+        if (rows.size) {
+          const fromStream = readAll(buildFromStream(rows, doc));
+          lastServed.streamCards = fromStream.cardCount;
+          if (fromStream.cardCount > best.cardCount) best = fromStream;
+        }
+      }
+      return best;
     } catch (e) {
+      lastServed = { status: 'error ' + String(e && e.message || e).slice(0, 80) };
       return null;
     }
   }
@@ -802,6 +929,7 @@
       return;                                   // else an ordinary LinkedIn tab, not ours
     }
     job = info;
+    try { self.HBF_APPLY_OVERRIDES(info.cfg); } catch (e) { /* the built-in markers are used */ }
 
     // LinkedIn drops filters an account may not use; say so instead of failing quietly.
     let ahMissing = job.activelyHiring && !/activelyHiringForJobTitles=/.test(location.search);
@@ -878,7 +1006,7 @@
       // The tab drew fewer people than the page holds (LinkedIn's newer page draws the rest only when they
       // are scrolled into view, which a background tab never does). The SAME page as LinkedIn's server sends
       // it holds every result: read them from there, with the same rules (the method other tools use too).
-      const served = await readServedPage();
+      const served = await readServedPage(page);
       if (served && served.cardCount > cardCount) {
         ({ people, skipped, cardCount } = served);
         fromHtml = true;
@@ -891,7 +1019,7 @@
       // Fewer people read than LinkedIn says this page has: send the page's STRUCTURE (counts and tag
       // patterns, no names or links) to the dashboard, so the cause can be fixed without anyone running
       // anything. Also says it in the run log.
-      try { await api('/api/search/diagnostics', { job_id: job.jobId, page, data: Object.assign(await pageStructure(cardCount, total), { fromHtml }) }); }
+      try { await api('/api/search/diagnostics', { job_id: job.jobId, page, data: Object.assign(await pageStructure(cardCount, total), { fromHtml, served: lastServed }) }); }
       catch (e) { /* never stops the run */ }
       beat(`page ${page}: read ${cardCount} of ${expectedOnPage(page)} people LinkedIn shows` +
            (total != null ? ` (about ${total} results)` : '') + ' - page details sent for checking');

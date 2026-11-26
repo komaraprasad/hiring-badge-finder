@@ -162,6 +162,65 @@ def classic_card_html(p: dict) -> str:
 </div></li>"""
 
 
+def rsc_stream(cards_html: list[str]) -> str:
+    """The cards as a React Server Components stream, like LinkedIn's newer pages: rows "<id>:<json>",
+    module rows, each card in its own row, links and photos as components (photos as LinkedIn's
+    renderPayload with rootUrl + suffixUrl), the list row pointing at the card rows with "$<id>"."""
+    from html.parser import HTMLParser
+
+    class P(HTMLParser):
+        def __init__(self):
+            super().__init__(convert_charrefs=True)
+            self.root = {"tag": "root", "attrs": {}, "kids": []}
+            self.stack = [self.root]
+
+        def handle_starttag(self, tag, attrs):
+            node = {"tag": tag, "attrs": dict(attrs), "kids": []}
+            self.stack[-1]["kids"].append(node)
+            if tag not in ("img", "br"):
+                self.stack.append(node)
+
+        def handle_endtag(self, tag):
+            if len(self.stack) > 1 and self.stack[-1]["tag"] == tag:
+                self.stack.pop()
+
+        def handle_data(self, data):
+            if data.strip():
+                self.stack[-1]["kids"].append(data.strip())
+
+    def conv(node):
+        if isinstance(node, str):
+            return node
+        kids = [conv(k) for k in node["kids"]]
+        kids = kids[0] if len(kids) == 1 else kids
+        a = node["attrs"]
+        if node["tag"] == "figure":                      # the photo: LinkedIn's image component
+            img = next(k for k in node["kids"] if isinstance(k, dict) and k["tag"] == "img")
+            src = img["attrs"]["src"]
+            cut = src.index("/0/")
+            return ["$", "$L2", None, {"shape": "circle", "height": "6x",
+                    "renderPayload": {"rootUrl": src[:cut], "imageRenditions": [{"width": 100, "suffixUrl": src[cut:]}]}}]
+        if node["tag"] == "a":                           # links: a client component with an href prop
+            return ["$", "$L3", None, {"href": a["href"], "children": kids}]
+        props = {k: v for k, v in a.items() if k in ("role", "aria-hidden", "class")}
+        if kids != []:
+            props["children"] = kids
+        return ["$", node["tag"], None, props]
+
+    rows = ['1:I["(app-pages)/search","SearchPage"]', '2:I["(app-pages)/image","Image"]', '3:I["(app-pages)/link","Link"]']
+    refs = []
+    for i, c in enumerate(cards_html):
+        p = P()
+        p.feed(c)
+        card = next(k for k in p.root["kids"] if isinstance(k, dict))
+        rid = format(0x10 + i, "x")
+        rows.append(f"{rid}:" + json.dumps(conv(card), separators=(",", ":")))
+        refs.append("$" + rid)
+    rows.append("0:" + json.dumps(["$", "main", None, {"children": ["$", "div", None, {"role": "list", "children": refs}]}],
+                                  separators=(",", ":")))
+    return "\n".join(rows) + "\n"
+
+
 def results_page(page: int, variant: str = "") -> str:
     if variant == "empty":
         return "<!doctype html><title>Search</title><main><h2>No results found</h2></main>"
@@ -205,6 +264,16 @@ def results_page(page: int, variant: str = "") -> str:
 <style>.sr-only{{position:absolute;left:-9999px}} figure{{margin:0;display:inline-block}} img{{width:48px;height:48px}}</style></head>
 <body><main><div data-testid="lazy-column"><div role="list" id="list">{cards}</div></div><a href="#">More</a></main>
 <script>for (const c of Array.from(document.querySelectorAll('#list > [role=listitem]')).slice(2)) c.remove();</script>
+</body></html>"""
+    if variant == "stream":
+        # LinkedIn's newer page as its server sends it: the HTML holds only the first 2 people; all 10 are in
+        # the React Server Components stream inside a script (an escaped JavaScript string). The tab draws 2.
+        allc = [card_html(p) for p in people_for_page(page)]
+        stream = json.dumps(rsc_stream(allc)).replace("</", "<\\/")
+        return f"""<!doctype html><html><head><meta charset="utf-8"><title>Search results</title>
+<style>.sr-only{{position:absolute;left:-9999px}} figure{{margin:0;display:inline-block}} img{{width:48px;height:48px}}</style></head>
+<body><main><div data-testid="lazy-column"><div role="list" id="list">{"".join(allc[:2])}</div></div><a href="#">More</a></main>
+<script>(self.__rsc = self.__rsc || []).push({stream});</script>
 </body></html>"""
     if variant == "slowdraw":
         # Like LinkedIn: the server sends all 10 results; the page draws 2 at first and the rest 4 s later.
