@@ -10,7 +10,7 @@ location, and exports them to CSV or Excel.
 | Server, database, export, dashboard, extension | Built and tested (see "Tests") |
 | **LinkedIn page markers** (`extension/config.js`) | **Verified** on one real signed-in people-search page (Nov 2026, narrow 734px layout). The desktop layout was not captured. See `frame_type_unverified` below. |
 | **Location IDs** (geoUrn) | Built in: **Bengaluru only** (the one ID captured from a real LinkedIn address). Every other place is set up automatically on its first search: LinkedIn opens, the extension chooses the city in LinkedIn's Locations filter, and the search starts by itself (see "Locations: built-in table and one-time set-up"). No place is ever widened to the whole country. |
-| **"Actively hiring" filter** | Dashboard option, **on by default**. Adds `activelyHiringForJobTitles=["-100"]`. LinkedIn labels it Premium: **unverified on free accounts**. If LinkedIn drops it, the run shows a warning and carries on without it. |
+| **"Actively hiring" filter** | Dashboard option, **on by default**. Adds `activelyHiringForJobTitles=["-100"]`. **Always stays on** (1.63.0). Full results on Premium / former-Premium / well-connected accounts; accounts with few connections and no Premium get only 2-4 people (LinkedIn's limit, see "Which LinkedIn account to use"). |
 | `app/main.py` (FastAPI) | Run and tested (`tests/test_api.py`). |
 | Postgres | Built (`app/pgstorage.py`), chosen when `DATABASE_URL` starts with `postgres://` (used by the Render deployment with a Neon database). The full test suite runs against it when `HBF_TEST_PG` is set. |
 
@@ -189,6 +189,19 @@ setting, in any order or case), the next page to read. Running it again opens Li
 - At the end of LinkedIn's results the next run starts at page 1 again.
 - If the continued page is empty now (LinkedIn shows fewer results), the same tab goes back to page 1 by itself.
 - Switch it off for a fresh scan from page 1: LinkedIn reorders results, so new people can appear on early pages.
+
+## Which LinkedIn account to use
+
+Which LinkedIn account runs the tool matters (confirmed Nov 2026, also by searching by hand without the tool):
+accounts with Premium (now or in the past) or a good number of connections, including our company account, get full
+result lists (about 25 leads in 3 pages). Accounts with **few connections and no Premium** get only 2-4 people for the
+same search, because LinkedIn restricts its "Hiring for job title" (Actively hiring) filter for them. This is
+LinkedIn, not the tool or the computer. Run the tool from the company account or a well-connected / Premium account.
+
+Since 1.63.0 the filter is never dropped by the tool. When LinkedIn shows only a few people with it, those people are
+saved and the run says: "LinkedIn showed only N people with its "Actively hiring" filter on this account". Searching
+again without the filter (more people, but less fresh and slower: 30 pages for 13 leads in a test) is built in but
+off; set `freeAccount.dropFilter` to `true` in `extension/config.js` or `app/extension_config.json` to switch it on.
 
 ## Limits you should know
 

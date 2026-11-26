@@ -55,7 +55,7 @@ Every day:
 |---|---|
 | The tool itself (Python, FastAPI, SQLite, openpyxl and the browser add-on) | **$0**: free, open-source software |
 | Hosting | **$0**: it runs on your own computer; nothing is hosted |
-| LinkedIn | The tool uses an ordinary LinkedIn account. It does not need a paid plan, but LinkedIn's "Actively hiring" filter may only work on paid plans (see section 5) |
+| LinkedIn | The tool uses an ordinary LinkedIn account. Use the company account or a well-connected / Premium one: accounts with few connections and no Premium get only 2-4 results (see section 5) |
 | Email lookup | **$0**: email guesses use free public DNS. No paid email-finder service is used |
 
 **Account risk, stated honestly.** LinkedIn's terms of use restrict automated collection of its data. Searches only
@@ -96,8 +96,13 @@ protect the account, not a slowness: a 4-page search has 3 pauses, so 12 to 24 s
 - **Ring type:** the photo address only proves there is *a* ring. A green (#OpenToWork) ring looks the same in the
   address; the "See open roles" rule separates them, but only one other-ring example has been seen.
 - **Desktop page layout:** the markers were captured on a narrow window; the full-width layout was not captured.
-- **Free accounts:** LinkedIn marks the "Actively hiring" filter as a paid feature. On a free account it may be ignored;
-  the tool then shows a warning and still applies the ring check.
+- **LinkedIn account:** Which LinkedIn account runs the tool matters (confirmed Nov 2026, also by searching by hand without the tool):
+  accounts with Premium (now or in the past) or a good number of connections, including our company account, get full
+  result lists (about 25 leads in 3 pages). Accounts with **few connections and no Premium** get only 2-4 people for the
+  same search, because LinkedIn restricts its "Hiring for job title" (Actively hiring) filter for them. This is
+  LinkedIn, not the tool or the computer. Run the tool from the company account or a well-connected / Premium account.
+  Since 1.63.0 the filter always stays on (fresh data). On a limited account the tool saves the few people shown and
+  says so; searching again without the filter exists but is off (`freeAccount.dropFilter` in `extension/config.js`).
 - **Cities:** only Bengaluru's number was captured here; the other built-in numbers were supplied by the user and not
   checked. The automatic lookup for other cities uses an undocumented LinkedIn address and was tested only on a mock. A wrong result is caught by exact-name checks and the "Most results are not in <city>" warning.
 - **The "Next" button itself:** the tool opens later pages directly (page=2, 3, ...) and uses LinkedIn's "Next" button
