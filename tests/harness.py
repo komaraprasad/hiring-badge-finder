@@ -196,7 +196,26 @@ def results_page(page: int, variant: str = "") -> str:
                 "<style>.sr-only{position:absolute;left:-9999px} img{width:48px;height:48px}</style></head>"
                 f"<body><main><section>{decoys}</section><div><div>{items}</div></div>"
                 "<nav><span>1</span><span>2</span></nav></main></body></html>")
-    if variant in ("slowdraw", "twoonly"):
+    if variant == "served":
+        # LinkedIn's newer page on another account (seen Nov 2026): the server sends all 10 results, but a
+        # background tab only ever DRAWS the first 2 (the rest are drawn when scrolled into view). No result
+        # count, no Next button. Simulated: the HTML holds 10 cards, the page script removes all but 2.
+        cards = "".join(card_html(p) for p in people_for_page(page))
+        return f"""<!doctype html><html><head><meta charset="utf-8"><title>Search results</title>
+<style>.sr-only{{position:absolute;left:-9999px}} figure{{margin:0;display:inline-block}} img{{width:48px;height:48px}}</style></head>
+<body><main><div data-testid="lazy-column"><div role="list" id="list">{cards}</div></div><a href="#">More</a></main>
+<script>for (const c of Array.from(document.querySelectorAll('#list > [role=listitem]')).slice(2)) c.remove();</script>
+</body></html>"""
+    if variant == "slowdraw":
+        # Like LinkedIn: the server sends all 10 results; the page draws 2 at first and the rest 4 s later.
+        cards = "".join(card_html(p) for p in people_for_page(page))
+        return f"""<!doctype html><html><head><meta charset="utf-8"><title>Search results</title>
+<style>.sr-only{{position:absolute;left:-9999px}} figure{{margin:0;display:inline-block}} img{{width:48px;height:48px}}</style></head>
+<body><main><div>About 20 results</div><div role="list" id="list">{cards}</div></main>
+<script>const late = Array.from(document.querySelectorAll('#list > [role=listitem]')).slice(2);
+late.forEach((c) => c.remove()); setTimeout(() => late.forEach((c) => document.getElementById('list').appendChild(c)), 4000);</script>
+</body></html>"""
+    if variant == "twoonly":
         # Another account / browser: the page says "About 20 results" but draws only 2 people at first.
         # slowdraw: the other 8 appear after 4 s. twoonly: they never appear. No Next button the tool knows.
         cards = [card_html(p) for p in people_for_page(page)]

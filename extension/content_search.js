@@ -40,6 +40,27 @@
   const clean = (s) => (s || '').replace(/\s+/g, ' ').trim();
   const re = (src, flags) => new RegExp(src, flags || 'i');
 
+  // Block elements start a new text line, as the browser shows them.
+  const BLOCK_TAGS = new Set(['DIV', 'P', 'LI', 'UL', 'OL', 'SECTION', 'ARTICLE', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6',
+    'BUTTON', 'FIGURE', 'HEADER', 'FOOTER', 'MAIN', 'BR', 'TR', 'TABLE']);
+  /** The element's text, one line per block, like innerText. Works for the drawn page AND for a results page
+   *  read from LinkedIn's own HTML (not drawn, so innerText has no line breaks there). */
+  function cardText(el) {
+    if (!el) return '';
+    if (el.ownerDocument === document) return el.innerText || '';
+    const out = [];
+    const walk = (n) => {
+      if (n.nodeType === 3) { out.push(n.nodeValue); return; }
+      if (n.nodeType !== 1 || /^(SCRIPT|STYLE|TEMPLATE|NOSCRIPT)$/.test(n.tagName)) return;
+      const block = BLOCK_TAGS.has(n.tagName);
+      if (block) out.push('\n');
+      for (const c of n.childNodes) walk(c);
+      if (block) out.push('\n');
+    };
+    walk(el);
+    return out.join('').split('\n').map((x) => x.replace(/\s+/g, ' ').trim()).filter(Boolean).join('\n');
+  }
+
   // '/in/<slug>' only: '/in/ann/opportunities/hiring-opportunities/' -> '/in/ann'.
   function profilePath(a) {
     try {
@@ -72,7 +93,7 @@
       const items = Array.from(kids);
       const people = new Set(items.map((k) => Array.from(k.querySelectorAll(CFG.profileLink)).map(profilePath).find(Boolean)));
       // every result card shows a connection degree ("• 2nd", "3rd+")
-      const allCards = items.every((k) => /\b(1st|2nd|3rd\+?)\b/.test(k.innerText || ''));
+      const allCards = items.every((k) => /\b(1st|2nd|3rd\+?)\b/.test(cardText(k)));
       if (allCards && people.size === items.length && people.size > bestPeople) { bestPeople = people.size; best = items; }
     });
     return best;
@@ -172,7 +193,7 @@
    *  Headline and location are the lines before the action button; anything after it
    *  (summary, mutual connections, followers) is never used, so a missing line stays empty. */
   function readFromLines(card, name) {
-    const lines = (card.innerText || '').split('\n').map(clean).filter(Boolean);
+    const lines = cardText(card).split('\n').map(clean).filter(Boolean);
     let degree = '';
     let sawAction = false;
     const rest = [];
@@ -209,6 +230,8 @@
     if (photo) {
       if ((B.selectors || []).some((sel) => { try { return photo.matches(sel); } catch (e) { return false; } })) return true;
       if (classSrcRe.test(photo.getAttribute('src') || '') || classSrcRe.test(photo.getAttribute('class') || '')) return true;
+      // LinkedIn's own HTML (read without drawing) may carry the photo address in srcset or a data-* attribute
+      if (Array.from(photo.attributes).some((at) => classSrcRe.test(at.value || ''))) return true;
       return (B.attrs || []).some((a) => textRe.test(photo.getAttribute(a) || ''));
     }
     // No own photo: check the card's elements, skipping anything inside a link to
@@ -240,7 +263,7 @@
 
   function hasOpenRoles(card) {
     if (hasHiringLink(card)) return true;
-    return re(CFG.openRolesRegex).test(card.innerText || '') ||
+    return re(CFG.openRolesRegex).test(cardText(card)) ||
       Array.from(card.querySelectorAll('a,button')).some((el) => re(CFG.openRolesRegex).test(el.textContent || ''));
   }
 
@@ -254,7 +277,7 @@
     let name = dedupeRepeat(firstText(card, CFG.name));
     if (!name) {
       for (const l of links.filter((x) => profilePath(x) === profilePathName)) {
-        const first = (l.innerText || '').split('\n').map(clean)
+        const first = cardText(l).split('\n').map(clean)
           .find((x) => x && !SR_NOISE_RE.test(x) && !NOISE_RE.test(x));
         const t = dedupeRepeat(first || '');
         if (t) { name = t; break; }
@@ -283,7 +306,7 @@
       badge_frame: badge,
       open_roles: framedSkipped ? false : hasOpenRoles(card),
       framed_skipped: framedSkipped,      // removed before sending (server schema unchanged)
-      card_text: clean(card.innerText).slice(0, 1500),
+      card_text: clean(cardText(card)).slice(0, 1500),
       current: readCurrent(card),
     };
   }
@@ -291,7 +314,7 @@
   /** "Current: Talent Partner at Acme" -> "Talent Partner at Acme"; '' when the card has no such line. */
   function readCurrent(card) {
     const rx = re(CFG.currentLineRegex);
-    for (const line of String(card.innerText || '').split('\n')) {
+    for (const line of cardText(card).split('\n')) {
       const m = clean(line).match(rx);
       if (m) return m[1].slice(0, 300);
     }
@@ -299,12 +322,25 @@
   }
 
   /** People to send, plus how many framed photos were skipped for having no hiring link. */
-  function readAll() {
-    const cards = findCards();
+  function readAll(rootEl) {
+    const cards = findCards(rootEl);
     const people = cards.map(readCard).filter((p) => p.profile_url);
     const skipped = people.filter((p) => p.framed_skipped).length;
     people.forEach((p) => { delete p.framed_skipped; });
     return { people, skipped, cardCount: cards.length };   // cardCount includes private "LinkedIn Member" cards
+  }
+
+  /** This results page exactly as LinkedIn's server sends it (one request for the same address, with the
+   *  person's own session), read with the same card rules. null when it cannot be read. */
+  async function readServedPage() {
+    try {
+      const res = await fetch(location.href, { credentials: 'include', headers: { accept: 'text/html,application/xhtml+xml' } });
+      if (!res.ok || !/\/search\/results\/people/.test(res.url)) return null;      // redirected (sign-in, check): not results
+      const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
+      return readAll(doc);
+    } catch (e) {
+      return null;
+    }
   }
 
   /** The page's STRUCTURE only, for fixing a layout the tool reads badly: element names, roles,
@@ -836,14 +872,26 @@
     }
 
     await renderAllCards(page);
-    const { people, skipped, cardCount } = readAll();
+    let { people, skipped, cardCount } = readAll();
+    let fromHtml = false;
+    if (cardCount < expectedOnPage(page)) {
+      // The tab drew fewer people than the page holds (LinkedIn's newer page draws the rest only when they
+      // are scrolled into view, which a background tab never does). The SAME page as LinkedIn's server sends
+      // it holds every result: read them from there, with the same rules (the method other tools use too).
+      const served = await readServedPage();
+      if (served && served.cardCount > cardCount) {
+        ({ people, skipped, cardCount } = served);
+        fromHtml = true;
+      }
+    }
     const total = resultsTotal();
     const more = total != null && total > page * 10;          // LinkedIn says there are more pages
+    if (fromHtml) beat(`page ${page}: the tab drew only part of the results; read all ${cardCount} from LinkedIn's page data`);
     if (cardCount < expectedOnPage(page)) {
       // Fewer people read than LinkedIn says this page has: send the page's STRUCTURE (counts and tag
       // patterns, no names or links) to the dashboard, so the cause can be fixed without anyone running
       // anything. Also says it in the run log.
-      try { await api('/api/search/diagnostics', { job_id: job.jobId, page, data: await pageStructure(cardCount, total) }); }
+      try { await api('/api/search/diagnostics', { job_id: job.jobId, page, data: Object.assign(await pageStructure(cardCount, total), { fromHtml }) }); }
       catch (e) { /* never stops the run */ }
       beat(`page ${page}: read ${cardCount} of ${expectedOnPage(page)} people LinkedIn shows` +
            (total != null ? ` (about ${total} results)` : '') + ' - page details sent for checking');

@@ -515,6 +515,26 @@ def test_small_listitem_box_does_not_hide_the_real_results(env):
     assert not any(p["name"].startswith("Decoy") for p in env.h.ingested)
 
 
+def test_results_the_tab_never_draws_are_read_from_linkedins_page_data(env):
+    """The other account's case: the tab draws only 2 of 10 people and shows no count or Next button.
+    Every person is read from the page as LinkedIn's server sends it, with the same fields and badge rule
+    as a fully drawn page, and every page is read."""
+    job_id = new_job(env)
+    env.launch(job_id, "&variant=served")
+    job = env.wait_job(job_id, timeout=90)
+    assert env.h.errors == []
+    assert (job["pages"], job["total_read"], job["saved"]) == (2, 20, 5)       # the same as a fully drawn run
+    hb = env.h.heartbeats
+    assert "page 1: 10 cards, 3 badges, 1 framed without open roles (skipped), 5 with open roles" in hb
+    assert any("read all 10 from LinkedIn's page data" in m for m in hb)
+    got = {p["name"]: p for p in env.h.ingested}
+    p1 = got["Person 1"]                                                   # same fields as the drawn page gives
+    assert p1["headline"] == "Senior Engineering Manager - Hiring SDETs for my team"
+    assert p1["location"] == "Bengaluru, Karnataka, India"
+    assert p1["profile_url"] == "https://www.linkedin.com/in/person-1"
+    assert got["Person 9"]["badge_frame"] is False                         # its mutual's framed avatar doesn't count
+
+
 def test_slowly_drawn_page_is_waited_for_and_every_page_read(env):
     """A page that draws 2 people first and the rest seconds later (hidden tab on another account):
     the tool waits for them, and LinkedIn's "About 20 results" keeps it going without a Next button."""

@@ -106,7 +106,10 @@ def test_no_secrets_or_external_calls_in_extension():
 
 def test_page_script_never_opens_profile_pages():
     text = _without_lookup((EXT / "content_search.js").read_text(encoding="utf-8"))
-    assert "location.href =" not in text and "window.open" not in text and "fetch(" not in text
+    assert "location.href =" not in text and "window.open" not in text
+    # One request only: the SAME search results page, as LinkedIn's server sends it (when the tab drew too few)
+    assert text.count("fetch(") == 1 and "fetch(location.href, { credentials: 'include'" in text
+    assert r"/\/search\/results\/people/.test(res.url)" in text   # a redirect (sign-in, check) is never read
 
 
 def test_the_lookup_only_calls_linkedins_location_address_and_keeps_nothing():

@@ -111,7 +111,8 @@
     // --- Rendering all cards on a page -----------------------------------
     // patientChecks / extraTries: when fewer cards are drawn than the page should have, keep scrolling
     // (up to about 10 s more) before reading, instead of stopping after 1 s without new cards.
-    render: { zoom: '0.25', scrollTries: 12, scrollGapMs: 500, extraTries: 20, patientChecks: 12 },
+    // (Short: when the tab still draws too few, the results are read from LinkedIn's page data instead.)
+    render: { zoom: '0.25', scrollTries: 12, scrollGapMs: 500, extraTries: 6, patientChecks: 4 },
 
     // --- Location IDs (geoUrn) --------------------------------------------
     // Built-in table. Every entry carries a "source:" comment (a test checks this). A city key
