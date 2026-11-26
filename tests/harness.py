@@ -284,6 +284,22 @@ const io = new IntersectionObserver((es) => {{
 }});
 io.observe(document.getElementById('more'));</script>
 </body></html>"""
+    if variant == "innerscroll":
+        # The failing accounts' page (report: page exactly one window tall): the results sit in their OWN
+        # scrolling box; 2 people at first, 4 more each time that box is scrolled near its end. No Next, no count.
+        allc = [card_html(p) for p in people_for_page(page)]
+        return f"""<!doctype html><html><head><meta charset="utf-8"><title>Search results</title>
+<style>html,body{{height:100%;overflow:hidden;margin:0}} .sr-only{{position:absolute;left:-9999px}}
+figure{{margin:0;display:inline-block}} img{{width:48px;height:48px}} #box{{height:300px;overflow-y:auto}} #pad{{height:400px}}</style></head>
+<body><main><div id="box" data-testid="lazy-column"><div role="list" id="list">{"".join(allc[:2])}</div><div id="pad"></div></div></main>
+<script>const ALL = {json.dumps(allc)}; let shown = 2, busy = false; const box = document.getElementById('box');
+box.addEventListener('scroll', () => {{
+  if (busy || shown >= ALL.length || box.scrollTop + box.clientHeight < box.scrollHeight - 50) return;
+  busy = true;
+  setTimeout(() => {{ for (const c of ALL.slice(shown, shown + 4)) document.getElementById('list').insertAdjacentHTML('beforeend', c);
+    shown += 4; busy = false; }}, 300);
+}});</script>
+</body></html>"""
     if variant == "aicards":
         # LinkedIn's AI search card design (seen on a failing account): each person is a <section> (no
         # role="listitem"); the page's role="listitem" elements are small parts INSIDE one person's card

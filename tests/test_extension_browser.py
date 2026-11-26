@@ -579,6 +579,17 @@ def test_page_loading_only_on_screen_is_shown_briefly_then_dashboard_comes_back(
     assert not any("/search/results/people" in t["url"] and t["active"] for t in tabs)   # LinkedIn tab not left in front
 
 
+def test_results_in_their_own_scrolling_box_are_loaded_by_scrolling_it(env):
+    """The failing accounts' page is one window tall; its results are in their own scrolling box and more
+    people load only when that box is scrolled. The box is scrolled like a mouse wheel would: every page read."""
+    job_id = new_job(env)
+    env.launch(job_id, "&variant=innerscroll")
+    job = env.wait_job(job_id, timeout=120)
+    assert env.h.errors == []
+    assert (job["pages"], job["total_read"], job["saved"]) == (2, 20, 5)       # was (1, 2, ...)
+    assert "page 1: 10 cards, 3 badges, 1 framed without open roles (skipped), 5 with open roles" in env.h.heartbeats
+
+
 def test_ai_search_card_design_reads_every_person_not_their_card_parts(env):
     """The failing account's page with the tab on screen: people are <section>s and the page's listitems are
     9 parts inside ONE person's card. Every person is read (was 1), mutual-connection avatars are not."""

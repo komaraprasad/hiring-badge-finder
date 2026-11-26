@@ -568,6 +568,24 @@
     return total == null ? 10 : Math.max(0, Math.min(10, total - (page - 1) * 10));
   }
 
+  /** Scroll every scrolling box on the page (not the page itself) to its end, so lists inside them load more. */
+  function scrollBoxesToEnd() {
+    const boxes = [];
+    for (const el of document.querySelectorAll('main, main *, [data-testid="lazy-column"], [data-testid="lazy-column"] *, body > div, body > div *')) {
+      if (boxes.length >= 40) break;
+      if (el.scrollHeight <= el.clientHeight + 20) continue;
+      const oy = getComputedStyle(el).overflowY;
+      if (oy === 'auto' || oy === 'scroll' || oy === 'overlay') boxes.push(el);
+    }
+    for (const el of boxes) {
+      try {
+        el.scrollTop = el.scrollHeight;
+        el.dispatchEvent(new Event('scroll'));            // LinkedIn's own listeners load the next people
+      } catch (e) { /* not scrollable after all */ }
+    }
+    return boxes.length;
+  }
+
   // ------------------------------------------------------- render all cards
   async function renderAllCards(page, patience) {
     const R = CFG.render;
@@ -594,6 +612,9 @@
         const tail = cards[cards.length - 1];
         if (tail) tail.scrollIntoView({ block: 'end' });
         window.scrollTo(0, document.documentElement.scrollHeight);
+        // Newer LinkedIn pages are one window tall: the results sit in their OWN scrolling box, and more
+        // people load only when that box is scrolled down (what a person does with the mouse wheel).
+        scrollBoxesToEnd();
         await sleep(R.scrollGapMs);
       }
     } finally {
